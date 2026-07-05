@@ -1,7 +1,7 @@
-"""Render a RepoIndex as a plain-English Markdown report (Slices 1-3)."""
+"""Render a RepoIndex as a plain-English Markdown report (Slices 1-4)."""
 from __future__ import annotations
 
-from analyze import FileInfo, Finding, Manifest, RepoIndex
+from analyze import FileInfo, Finding, Manifest, Module, RepoIndex
 
 # category -> section heading, in report display order.
 FINDING_CATEGORIES = [
@@ -37,6 +37,7 @@ def render_markdown(index: RepoIndex) -> str:
     lines += ["", *_render_detected_stack(index.manifests)]
     lines += ["", *_render_entrypoints(index.files)]
     lines += ["", *_render_review_findings(index.findings)]
+    lines += ["", *_render_start_here(index.modules)]
 
     return "\n".join(lines) + "\n"
 
@@ -109,3 +110,28 @@ def _render_finding(f: Finding) -> list[str]:
         f"  - Recommendation: {f.recommendation}",
         "",
     ]
+
+
+def _render_start_here(modules: list[Module]) -> list[str]:
+    lines = ["## Start Here", ""]
+    if not modules:
+        lines.append("No modules detected.")
+        return lines
+    lines += [
+        "Modules below are ordered by suggested read order: modules with an "
+        "entrypoint first, then modules with a manifest/config file, then "
+        "everything else.",
+        "",
+    ]
+    for module in modules:
+        lines += _render_module(module)
+    return lines
+
+
+def _render_module(module: Module) -> list[str]:
+    lines = [f"### {module.name}", "", module.description, ""]
+    if module.key_files:
+        key_files = ", ".join(f"`{path}`" for path in module.key_files)
+        lines.append(f"Key files: {key_files}")
+    lines.append("")
+    return lines

@@ -6,6 +6,9 @@ per-file role classification (entrypoint/test/config/docs/unclassified).
 Issue 3 adds evidence-backed review `Finding`s (missing test coverage,
 config/secrets risk, dependency risk), derived only from files/roles/
 manifests already collected above — no new file-content scanning.
+Slice 4 groups files into `Module`s (directory-based heuristic) with a
+"start here" description per module and a suggested read order, again
+derived only from files/roles/manifests already collected above.
 """
 from __future__ import annotations
 
@@ -66,6 +69,30 @@ PIN_CHECKABLE_MANIFEST_KINDS = {"python-requirements", "python-setuptools"}
 
 VERSION_PIN_MARKERS = ("==", ">=", "<=", "~=", "!=", ">", "<")
 
+# Display name for files that sit directly at the repo root (no containing
+# top-level directory to group them by).
+ROOT_MODULE_NAME = "(repo root)"
+
+# Cap how many files are listed as "key files" per module, so the report
+# stays readable for directories with many files.
+MAX_KEY_FILES_PER_MODULE = 5
+
+# Directory-name -> inferred purpose. Naming-only heuristic evidence: matching
+# a name here is an inference about intent, never a verified fact about the
+# code's actual behavior.
+INFERRED_MODULE_PURPOSE = {
+    "test": "test suite", "tests": "test suite", "__tests__": "test suite",
+    "api": "API layer", "app": "main application code", "src": "primary source code",
+    "lib": "shared library code", "libs": "shared library code",
+    "utils": "shared utility code", "helpers": "shared utility code",
+    "models": "data models", "views": "view layer", "controllers": "controllers",
+    "components": "UI components", "pages": "page/route definitions",
+    "routes": "route definitions", "docs": "documentation", "doc": "documentation",
+    "config": "configuration", "scripts": "scripts/tooling",
+    "public": "static assets", "static": "static assets", "assets": "static assets",
+    "cli": "command-line interface", "core": "core/shared logic",
+}
+
 
 @dataclass
 class RepoInfo:
@@ -106,12 +133,23 @@ class Finding:
 
 
 @dataclass
+class Module:
+    name: str
+    file_count: int
+    key_files: list[str]
+    has_entrypoint: bool
+    has_manifest: bool
+    description: str
+
+
+@dataclass
 class RepoIndex:
     repo: RepoInfo
     files: list[FileInfo]
     language_counts: dict[str, int]
     manifests: list[Manifest] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    modules: list[Module] = field(default_factory=list)
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
@@ -386,6 +424,91 @@ def _has_version_pin(dependency: str) -> bool:
     return any(marker in dependency for marker in VERSION_PIN_MARKERS)
 
 
+def group_into_modules(files: list[FileInfo], manifests: list[Manifest]) -> list[Module]:
+    """Group files by top-level directory (files directly at the repo root
+    form their own `ROOT_MODULE_NAME` group) and build one `Module` per
+    group, already sorted into suggested read order (see `_module_sort_key`).
+    A directory-based heuristic only — not an import/dependency analysis."""
+    groups = _group_files_by_top_dir(files)
+    manifest_paths = {m.path for m in manifests}
+    modules = [_build_module(name, group, manifest_paths) for name, group in groups.items()]
+    return sorted(modules, key=_module_sort_key)
+
+
+def _group_files_by_top_dir(files: list[FileInfo]) -> dict[str, list[FileInfo]]:
+    groups: dict[str, list[FileInfo]] = {}
+    for f in files:
+        parts = Path(f.path).parts
+        name = parts[0] if len(parts) > 1 else ROOT_MODULE_NAME
+        groups.setdefault(name, []).append(f)
+    return groups
+
+
+def _build_module(name: str, files: list[FileInfo], manifest_paths: set[str]) -> Module:
+    key_files = _select_key_files(files)
+    return Module(
+        name=name,
+        file_count=len(files),
+        key_files=key_files,
+        has_entrypoint=any(f.role == "entrypoint" for f in files),
+        has_manifest=any(f.path in manifest_paths for f in files),
+        description=_describe_module(name, files, key_files),
+    )
+
+
+def _select_key_files(files: list[FileInfo]) -> list[str]:
+    """Entrypoints, then manifest/config files, then everything else (each
+    tier alphabetical); capped so large directories stay readable."""
+    def priority(f: FileInfo) -> tuple[int, str]:
+        rank = 0 if f.role == "entrypoint" else 1 if f.role == "config" else 2
+        return (rank, f.path)
+
+    ranked = sorted(files, key=priority)
+    return [f.path for f in ranked[:MAX_KEY_FILES_PER_MODULE]]
+
+
+def _module_sort_key(module: Module) -> tuple[int, int, str]:
+    """Suggested read order: modules with an entrypoint first, then modules
+    with a manifest/config file, then everything else; ties within a tier
+    broken by file count (most files first), then name alphabetically."""
+    tier = 0 if module.has_entrypoint else 1 if module.has_manifest else 2
+    return (tier, -module.file_count, module.name.lower())
+
+
+def _describe_module(name: str, files: list[FileInfo], key_files: list[str]) -> str:
+    """One paragraph: a fact sentence (file count/language/key file, all
+    traceable to real paths) followed by an inference sentence (what the
+    module is likely for, explicitly labeled as inferred from naming)."""
+    return f"{_module_fact_sentence(name, files, key_files)} {_module_inference_sentence(name)}"
+
+
+def _module_fact_sentence(name: str, files: list[FileInfo], key_files: list[str]) -> str:
+    count = len(files)
+    languages = {f.language for f in files}
+    noun = f"{next(iter(languages))} file" if len(languages) == 1 else "file"
+    noun += "s" if count != 1 else ""
+    highlight = f", including `{key_files[0]}`" if key_files else ""
+    if name == ROOT_MODULE_NAME:
+        verb = "sits" if count == 1 else "sit"
+        return f"{count} {noun} {verb} directly at the repo root{highlight}."
+    return f"The `{name}/` directory holds {count} {noun}{highlight}."
+
+
+def _module_inference_sentence(name: str) -> str:
+    if name == ROOT_MODULE_NAME:
+        return (
+            "Root-level files are usually entrypoints, manifests, and docs rather "
+            "than a single feature area (inferred from convention, not verified)."
+        )
+    purpose = INFERRED_MODULE_PURPOSE.get(name.lower())
+    if purpose is None:
+        return (
+            f"No naming convention was recognized for `{name}/`, so its purpose "
+            "isn't inferred here — see its key files below instead."
+        )
+    return f"Based on its directory name, this looks like the project's {purpose} (inferred from naming, not verified)."
+
+
 def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     owner, name = (parse_github_url(url) if url else ("", repo_path.name))
     branch, commit_sha = "", ""
@@ -399,6 +522,7 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
         language_counts[f.language] = language_counts.get(f.language, 0) + 1
     manifests = extract_manifests(repo_path, files)
     findings = generate_findings(files, manifests)
+    modules = group_into_modules(files, manifests)
 
     repo_info = RepoInfo(
         provider="github" if url else "local",
@@ -406,7 +530,7 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     )
     return RepoIndex(
         repo=repo_info, files=files, language_counts=language_counts,
-        manifests=manifests, findings=findings,
+        manifests=manifests, findings=findings, modules=modules,
     )
 
 
