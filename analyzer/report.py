@@ -1,7 +1,14 @@
-"""Render a RepoIndex as a plain-English Markdown report (Slice 1 + Slice 2)."""
+"""Render a RepoIndex as a plain-English Markdown report (Slices 1-3)."""
 from __future__ import annotations
 
-from analyze import FileInfo, Manifest, RepoIndex
+from analyze import FileInfo, Finding, Manifest, RepoIndex
+
+# category -> section heading, in report display order.
+FINDING_CATEGORIES = [
+    ("missing-tests", "Missing Test Coverage"),
+    ("secrets-risk", "Config & Secrets Risk"),
+    ("dependency-risk", "Dependency Risk"),
+]
 
 
 def render_markdown(index: RepoIndex) -> str:
@@ -29,6 +36,7 @@ def render_markdown(index: RepoIndex) -> str:
 
     lines += ["", *_render_detected_stack(index.manifests)]
     lines += ["", *_render_entrypoints(index.files)]
+    lines += ["", *_render_review_findings(index.findings)]
 
     return "\n".join(lines) + "\n"
 
@@ -72,3 +80,32 @@ def _render_entrypoints(files: list[FileInfo]) -> list[str]:
     for f in entrypoints:
         lines.append(f"- `{f.path}`")
     return lines
+
+
+def _render_review_findings(findings: list[Finding]) -> list[str]:
+    lines = ["## Review Findings", ""]
+    for category, heading in FINDING_CATEGORIES:
+        matching = [f for f in findings if f.category == category]
+        lines += _render_finding_category(heading, matching)
+    return lines
+
+
+def _render_finding_category(heading: str, findings: list[Finding]) -> list[str]:
+    lines = [f"### {heading}", ""]
+    if not findings:
+        lines += ["No findings in this category.", ""]
+        return lines
+    for f in findings:
+        lines += _render_finding(f)
+    return lines
+
+
+def _render_finding(f: Finding) -> list[str]:
+    evidence = ", ".join(f"`{path}`" for path in f.evidence)
+    return [
+        f"- **[{f.severity}] {f.title}** (confidence: {f.confidence})",
+        f"  - Evidence: {evidence}",
+        f"  - Why it matters: {f.explanation}",
+        f"  - Recommendation: {f.recommendation}",
+        "",
+    ]

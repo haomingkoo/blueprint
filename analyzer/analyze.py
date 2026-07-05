@@ -3,6 +3,9 @@
 Issue 1 built Repo, File, and language-count facts. Issue 2 adds manifest
 detection (package.json, pyproject.toml, requirements.txt, setup.py) and
 per-file role classification (entrypoint/test/config/docs/unclassified).
+Issue 3 adds evidence-backed review `Finding`s (missing test coverage,
+config/secrets risk, dependency risk), derived only from files/roles/
+manifests already collected above — no new file-content scanning.
 """
 from __future__ import annotations
 
@@ -50,6 +53,19 @@ TEST_FILE_SUFFIXES = (
 
 TEST_DIR_NAMES = {"tests", "test", "__tests__"}
 
+# A manifest listing this many dependencies or more is flagged as a large,
+# harder-to-audit dependency surface. Heuristic threshold, not a hard limit.
+LARGE_DEPENDENCY_THRESHOLD = 30
+
+# Manifest kinds whose `dependencies` strings retain the original version
+# specifier (e.g. "flask==2.0.1"), so "no pinned versions" is checkable.
+# npm's `dependencies` only keeps package names (see _parse_package_json),
+# and pyproject's Poetry branch does the same, so neither is included here —
+# claiming "unpinned" for those would not be backed by real evidence.
+PIN_CHECKABLE_MANIFEST_KINDS = {"python-requirements", "python-setuptools"}
+
+VERSION_PIN_MARKERS = ("==", ">=", "<=", "~=", "!=", ">", "<")
+
 
 @dataclass
 class RepoInfo:
@@ -79,11 +95,23 @@ class Manifest:
 
 
 @dataclass
+class Finding:
+    severity: str
+    category: str
+    title: str
+    evidence: list[str]
+    explanation: str
+    recommendation: str
+    confidence: str
+
+
+@dataclass
 class RepoIndex:
     repo: RepoInfo
     files: list[FileInfo]
     language_counts: dict[str, int]
     manifests: list[Manifest] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
@@ -234,6 +262,128 @@ def _setup_call_kwargs(call: ast.Call) -> tuple[str, list[str]]:
     return name, dependencies
 
 
+def generate_findings(files: list[FileInfo], manifests: list[Manifest]) -> list[Finding]:
+    """Evidence-backed review findings, derived only from already-collected
+    files/roles/manifests. Every finding cites a real path from `files` or
+    `manifests`; confidence is "heuristic" throughout — nothing here is
+    verified by static analysis, a secret scanner, or a vulnerability DB."""
+    findings = []
+    findings += _find_missing_test_coverage(files)
+    findings += _find_secrets_risk(files)
+    findings += _find_dependency_risk(manifests)
+    return findings
+
+
+def _find_missing_test_coverage(files: list[FileInfo]) -> list[Finding]:
+    """Flag entrypoint files with no nearby test: none in the same directory,
+    and no test_<name>/<name>_test/<name>.test.* file anywhere in the repo."""
+    findings = []
+    for f in files:
+        if f.role == "entrypoint" and not _has_nearby_test(f, files):
+            findings.append(Finding(
+                severity="medium",
+                category="missing-tests",
+                title=f"No test coverage found near entrypoint `{f.path}`",
+                evidence=[f.path],
+                explanation=(
+                    "This file is classified as an entrypoint, but no test file "
+                    "was found in the same directory or matching its name "
+                    "(test_<name>/<name>_test/<name>.test.*)."
+                ),
+                recommendation=f"Add a test covering `{f.path}`, alongside it or in a tests/ directory.",
+                confidence="heuristic",
+            ))
+    return findings
+
+
+def _has_nearby_test(entry: FileInfo, files: list[FileInfo]) -> bool:
+    entry_path = Path(entry.path)
+    test_files = [f for f in files if f.role == "test"]
+    if any(Path(f.path).parent == entry_path.parent for f in test_files):
+        return True
+    stem = entry_path.stem
+    name_patterns = {stem, f"test_{stem}", f"{stem}_test"}
+    return any(Path(f.path).name.split(".")[0] in name_patterns for f in test_files)
+
+
+def _find_secrets_risk(files: list[FileInfo]) -> list[Finding]:
+    """Flag a committed `.env` with no `.env.example`/`.env.sample` template.
+    Conservative by design: this does not read `.env`'s content or claim a
+    secret was found, only that the pattern is present and worth confirming."""
+    env_paths = [f.path for f in files if Path(f.path).name == ".env"]
+    if not env_paths:
+        return []
+    names = {Path(f.path).name for f in files}
+    if ".env.example" in names or ".env.sample" in names:
+        return []
+    return [Finding(
+        severity="high",
+        category="secrets-risk",
+        title="`.env` file committed with no `.env.example` template",
+        evidence=env_paths,
+        explanation=(
+            "A `.env` file is tracked in this repository and no `.env.example` "
+            "or `.env.sample` was found. `.env` files commonly hold real secrets; "
+            "if this one does, those secrets are now in git history."
+        ),
+        recommendation=(
+            "Confirm whether `.env` holds real secrets. If so, remove it from git "
+            "history and rotate any exposed credentials; add `.env` to `.gitignore` "
+            "and commit a `.env.example` with placeholder values instead."
+        ),
+        confidence="heuristic",
+    )]
+
+
+def _find_dependency_risk(manifests: list[Manifest]) -> list[Finding]:
+    findings = []
+    for m in manifests:
+        findings += _large_dependency_finding(m)
+        findings += _unpinned_dependency_finding(m)
+    return findings
+
+
+def _large_dependency_finding(m: Manifest) -> list[Finding]:
+    if len(m.dependencies) < LARGE_DEPENDENCY_THRESHOLD:
+        return []
+    return [Finding(
+        severity="medium",
+        category="dependency-risk",
+        title=f"`{m.path}` lists {len(m.dependencies)} dependencies",
+        evidence=[m.path],
+        explanation=(
+            f"This manifest declares {len(m.dependencies)} dependencies "
+            f"(heuristic threshold: {LARGE_DEPENDENCY_THRESHOLD}), which increases "
+            "supply-chain surface area and audit burden."
+        ),
+        recommendation="Review whether all dependencies are still in use; trim or audit unused ones.",
+        confidence="heuristic",
+    )]
+
+
+def _unpinned_dependency_finding(m: Manifest) -> list[Finding]:
+    if m.kind not in PIN_CHECKABLE_MANIFEST_KINDS or not m.dependencies:
+        return []
+    if any(_has_version_pin(dep) for dep in m.dependencies):
+        return []
+    return [Finding(
+        severity="medium",
+        category="dependency-risk",
+        title=f"`{m.path}` pins no dependency versions",
+        evidence=[m.path],
+        explanation=(
+            f"None of the {len(m.dependencies)} dependencies in this manifest specify "
+            "a version constraint, which risks non-reproducible installs."
+        ),
+        recommendation="Pin dependency versions (e.g. `==`) or use a lockfile for reproducible builds.",
+        confidence="heuristic",
+    )]
+
+
+def _has_version_pin(dependency: str) -> bool:
+    return any(marker in dependency for marker in VERSION_PIN_MARKERS)
+
+
 def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     owner, name = (parse_github_url(url) if url else ("", repo_path.name))
     branch, commit_sha = "", ""
@@ -246,12 +396,16 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     for f in files:
         language_counts[f.language] = language_counts.get(f.language, 0) + 1
     manifests = extract_manifests(repo_path, files)
+    findings = generate_findings(files, manifests)
 
     repo_info = RepoInfo(
         provider="github" if url else "local",
         owner=owner, name=name, branch=branch, commit_sha=commit_sha, url=url,
     )
-    return RepoIndex(repo=repo_info, files=files, language_counts=language_counts, manifests=manifests)
+    return RepoIndex(
+        repo=repo_info, files=files, language_counts=language_counts,
+        manifests=manifests, findings=findings,
+    )
 
 
 def analyze_github_repo(url: str) -> RepoIndex:
