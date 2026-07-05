@@ -33,8 +33,8 @@ repos:
   - repo: local
     hooks:
       - id: analyzer-compile
-        name: analyzer compileall
-        entry: python3 -m compileall -q analyzer
+        name: analyzer + server compileall
+        entry: python3 -m compileall -q analyzer server
         language: system
         pass_filenames: false
       - id: analyzer-ty
@@ -42,5 +42,5 @@ repos:
         entry: ty check
         args: ["--output-format", "concise"]
         language: python
-        additional_dependencies: ["ty==0.0.56"]
+        additional_dependencies: ["ty==0.0.56", "fastapi==0.135.1", "pydantic==2.12.5"]
         pass_filenames: false

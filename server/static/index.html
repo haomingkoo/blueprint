@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Blueprint — Repo Analyzer</title>
+<meta name="description" content="Paste a public GitHub repo URL and get an evidence-backed review: detected stack, entrypoints, risks, and a start-here guide." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div class="grid-overlay" aria-hidden="true"></div>
+
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#8977;</span>
+      <div>
+        <p class="brand-eyebrow">Evidence-backed repo analysis</p>
+        <h1 class="brand-title">Blueprint</h1>
+      </div>
+    </div>
+    <p class="brand-tagline">
+      Paste a public GitHub URL. Get a sectioned report — stack, entrypoints,
+      risk findings, and where to start reading — every claim traced back to a file.
+    </p>
+  </div>
+</header>
+
+<main class="page">
+  <section class="panel intake" aria-labelledby="intake-heading">
+    <h2 id="intake-heading" class="visually-hidden">Analyze a repository</h2>
+    <form id="analyze-form" class="intake-form" autocomplete="off">
+      <label for="repo-url" class="intake-label"><span class="tag-index">&sect;01</span> Repository URL</label>
+      <div class="intake-row">
+        <input
+          id="repo-url"
+          name="repo_url"
+          type="url"
+          inputmode="url"
+          placeholder="https://github.com/owner/name"
+          required
+          class="intake-input"
+        />
+        <button type="submit" id="analyze-button" class="intake-button">
+          <span class="button-label">Analyze</span>
+        </button>
+      </div>
+      <p class="intake-hint">
+        Public GitHub repos only. Real analysis clones and scans the repo —
+        it takes 10&ndash;30 seconds, sometimes longer for large repos.
+      </p>
+    </form>
+
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </section>
+
+  <section id="report" class="report" aria-live="polite"></section>
+</main>
+
+<footer class="site-footer">
+  <p>Blueprint · v0.2 · every finding cites a file</p>
+</footer>
+
+<template id="tpl-empty-state">
+  <p class="empty-note">None detected.</p>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>

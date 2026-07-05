@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   analyzer-quality:
-    name: Analyzer lint, type check, tests
+    name: Analyzer + server lint, type check, tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -29,19 +29,21 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip pytest ruff==0.15.20 ty==0.0.56
+        run: |
+          python -m pip install --upgrade pip pytest httpx ruff==0.15.20 ty==0.0.56
+          python -m pip install -r server/requirements.txt
 
-      - name: Compile analyzer
-        run: python -m compileall -q analyzer
+      - name: Compile analyzer + server
+        run: python -m compileall -q analyzer server
 
       - name: Ruff critical checks
-        run: ruff check analyzer
+        run: ruff check analyzer server
 
       - name: ty baseline type check
         run: ty check --output-format github
 
-      - name: Analyzer tests
-        run: python -m pytest analyzer -q
+      - name: Analyzer + server tests
+        run: python -m pytest analyzer server -q
 
   secret-scan:
     name: Secret scan
