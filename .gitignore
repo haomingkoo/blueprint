@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+node_modules/
+dist/
+build/
+.pytest_cache/
+*.jpeg
+*.jpg
+*.png

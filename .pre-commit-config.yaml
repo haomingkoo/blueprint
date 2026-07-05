@@ -1,0 +1,46 @@
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        name: ruff critical checks
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: detect-secrets staged scan
+        exclude: ^(.*\.lock|.*\.log)$
+
+  - repo: local
+    hooks:
+      - id: analyzer-compile
+        name: analyzer compileall
+        entry: python3 -m compileall -q analyzer
+        language: system
+        pass_filenames: false
+      - id: analyzer-ty
+        name: ty baseline type check
+        entry: ty check
+        args: ["--output-format", "concise"]
+        language: python
+        additional_dependencies: ["ty==0.0.56"]
+        pass_filenames: false
