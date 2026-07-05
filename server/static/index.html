@@ -60,6 +60,7 @@
   <div id="view-tabs" class="view-tabs" hidden>
     <button type="button" class="view-tab is-active" data-view="report">Report</button>
     <button type="button" class="view-tab" data-view="graph">Architecture Graph</button>
+    <button type="button" class="view-tab" data-view="flow">Flow Explorer</button>
   </div>
 
   <section id="report" class="report" aria-live="polite"></section>
@@ -88,6 +89,45 @@
       <aside id="graph-drawer" class="graph-drawer" hidden></aside>
     </div>
   </section>
+
+  <section id="flow-view" class="flow-view" hidden aria-label="Flow explorer">
+    <p id="flow-view-empty-note" class="empty-note" hidden>
+      No flows detected for this repository — this needs at least one detected
+      entrypoint reachable through a detected import/dependency edge.
+    </p>
+
+    <div id="flow-picker" class="flow-picker">
+      <label for="flow-select" class="flow-select-label">Flow</label>
+      <select id="flow-select" class="flow-select" aria-label="Select a detected flow"></select>
+    </div>
+
+    <div id="flow-explanation" class="flow-explanation"></div>
+
+    <div id="flow-diagram-wrap" class="flow-diagram-wrap">
+      <div class="graph-toolbar">
+        <input
+          id="flow-graph-search"
+          type="search"
+          class="graph-search-input"
+          placeholder="Search nodes by label…"
+          aria-label="Search flow nodes"
+        />
+        <div id="flow-graph-filters" class="graph-filters"></div>
+        <div class="graph-zoom-controls">
+          <button type="button" id="flow-graph-zoom-out" class="graph-zoom-button" aria-label="Zoom out">&minus;</button>
+          <button type="button" id="flow-graph-zoom-in" class="graph-zoom-button" aria-label="Zoom in">+</button>
+          <button type="button" id="flow-graph-zoom-fit" class="graph-zoom-button graph-zoom-fit" aria-label="Fit to view">Fit</button>
+        </div>
+      </div>
+      <div class="graph-canvas-wrap">
+        <svg id="flow-graph-svg" class="graph-svg" role="img" aria-label="Selected flow diagram"></svg>
+        <p id="flow-graph-empty-note" class="empty-note graph-empty-note" hidden>
+          No nodes in this flow.
+        </p>
+        <aside id="flow-graph-drawer" class="graph-drawer" hidden></aside>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer class="site-footer">
@@ -100,6 +140,7 @@
 
 <script src="/vendor/dagre.min.js"></script>
 <script src="/graph.js"></script>
+<script src="/flow.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

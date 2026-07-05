@@ -900,3 +900,85 @@ body {
 @media (max-width: 720px) {
   .graph-drawer { left: 0.75rem; width: auto; }
 }
+
+/* ---------- Flow explorer (Slice 7) ---------- */
+
+.flow-view {
+  position: relative;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+
+.flow-view[hidden] { display: none; }
+
+.flow-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+
+.flow-picker[hidden] { display: none; }
+
+.flow-select-label {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.flow-select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.flow-select:focus-visible { border-color: var(--accent); }
+
+.flow-explanation {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.1rem;
+}
+
+.flow-explanation:empty { display: none; }
+
+.flow-title {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--accent-strong);
+  margin: 0 0 0.6rem;
+}
+
+.flow-explanation-text {
+  font-family: var(--font-serif);
+  color: var(--ink);
+  margin: 0 0 0.75rem;
+}
+
+.flow-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0;
+}
+
+.flow-evidence-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+.flow-diagram-wrap[hidden] { display: none; }

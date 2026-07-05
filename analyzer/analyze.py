@@ -170,6 +170,24 @@ class Edge:
 
 
 @dataclass
+class Flow:
+    """One traced flow through the architecture graph (PRD MVP Data Model).
+    Slice 7 emits exactly one flow type: an entrypoint reachability trace —
+    starting at the module containing an entrypoint file, everything
+    reachable via the already-detected `imports`/`depends_on` edges (see
+    `build_graph`, `detect_flows`). `nodes`/`edges` are always a real subset
+    of `RepoIndex.nodes`/`.edges` — no new file-content parsing, nothing
+    fabricated. `confidence` mirrors `EDGE_CONFIDENCE`: a flow can never be
+    more certain than the (heuristic) edges it's traced from."""
+    title: str
+    nodes: list[Node]
+    edges: list[Edge]
+    explanation: str
+    evidence: list[str]
+    confidence: str
+
+
+@dataclass
 class RepoIndex:
     repo: RepoInfo
     files: list[FileInfo]
@@ -179,6 +197,7 @@ class RepoIndex:
     modules: list[Module] = field(default_factory=list)
     nodes: list[Node] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
+    flows: list[Flow] = field(default_factory=list)
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
@@ -545,6 +564,7 @@ def _module_inference_sentence(name: str) -> str:
 # possible and must be labeled honestly rather than presented as certain.
 NODE_CONFIDENCE = "structural"
 EDGE_CONFIDENCE = "heuristic"
+FLOW_CONFIDENCE = "heuristic"
 
 _JS_LANGUAGES = {"JavaScript", "TypeScript"}
 _PYTHON_MANIFEST_KINDS = {"python-pyproject", "python-requirements", "python-setuptools"}
@@ -743,6 +763,97 @@ def _strip_version_pin(dependency: str) -> str:
     return dependency.strip()
 
 
+def detect_flows(nodes: list[Node], edges: list[Edge], modules: list[Module]) -> list[Flow]:
+    """The one flow type this slice detects: entrypoint reachability. For
+    each module containing an entrypoint file, trace everything reachable
+    from that module via the graph's already-computed edges (transitive
+    closure) — reusing `build_graph`'s `nodes`/`edges` as-is, no new
+    file-content parsing. An entrypoint with no outgoing edges still gets a
+    flow (its explanation says so explicitly, per "no fake precision" — see
+    `_describe_reachability_flow`); a flow is only skipped globally when
+    there are no entrypoint modules at all, or the graph has no edges
+    anywhere to trace (both would otherwise produce a fabricated-looking,
+    edge-less "flow")."""
+    entrypoint_modules = [m for m in modules if m.has_entrypoint]
+    if not entrypoint_modules or not edges:
+        return []
+    nodes_by_id = {n.id: n for n in nodes}
+    return [_build_reachability_flow(m, nodes_by_id, edges) for m in entrypoint_modules]
+
+
+def _build_reachability_flow(module: Module, nodes_by_id: dict[str, Node], edges: list[Edge]) -> Flow:
+    start_id = f"module:{module.name}"
+    reached_ids, reached_edges = _trace_reachable_edges(start_id, edges)
+    flow_nodes = [nodes_by_id[node_id] for node_id in reached_ids if node_id in nodes_by_id]
+    evidence = sorted({path for node in flow_nodes for path in node.evidence})
+    return Flow(
+        title=f"Entrypoint reachability: {module.name}",
+        nodes=flow_nodes,
+        edges=reached_edges,
+        explanation=_describe_reachability_flow(module, reached_edges),
+        evidence=evidence,
+        confidence=FLOW_CONFIDENCE,
+    )
+
+
+def _trace_reachable_edges(start_id: str, edges: list[Edge]) -> tuple[list[str], list[Edge]]:
+    """Breadth-first reachability over the already-computed edge list,
+    following only real `Edge`s whose `source` has been reached — a real
+    subset of `RepoIndex.edges`, never invented."""
+    visited_order = [start_id]
+    seen = {start_id}
+    queue = [start_id]
+    reached_edges: list[Edge] = []
+    while queue:
+        current = queue.pop(0)
+        for edge in edges:
+            if edge.source != current:
+                continue
+            reached_edges.append(edge)
+            if edge.target not in seen:
+                seen.add(edge.target)
+                visited_order.append(edge.target)
+                queue.append(edge.target)
+    return visited_order, reached_edges
+
+
+def _describe_reachability_flow(module: Module, reached_edges: list[Edge]) -> str:
+    """Plain-English explanation (PRD Flow Explorer requirement). An
+    entrypoint with zero outgoing edges is explicitly called out as a
+    missing/uncertain connection, never silently omitted or dressed up as
+    a real flow with something to show."""
+    entry_ref = "the repo root" if module.name == ROOT_MODULE_NAME else f"`{module.name}/`"
+    if not reached_edges:
+        return (
+            f"Starting from the entrypoint in {entry_ref}, no outgoing imports or "
+            "dependencies were detected to any other module or manifest. This is a "
+            "missing/uncertain connection, not a claim that the entrypoint has no "
+            "real dependencies — the regex-based import scanner may simply not "
+            "have recognized its import style."
+        )
+    modules_reached = sorted({
+        e.target.split(":", 1)[1] for e in reached_edges if e.type == "imports"
+    })
+    deps_reached = sorted({
+        e.target.split(":", 1)[1] for e in reached_edges if e.type == "depends_on"
+    })
+    edge_count = len(reached_edges)
+    sentence = (
+        f"Starting from the entrypoint in {entry_ref}, this traces every module and "
+        f"dependency reachable via {edge_count} detected import/dependency "
+        f"edge{'s' if edge_count != 1 else ''}."
+    )
+    if modules_reached:
+        sentence += f" Reaches module(s): {', '.join(modules_reached)}."
+    if deps_reached:
+        sentence += f" Depends on manifest(s): {', '.join(deps_reached)}."
+    sentence += (
+        " Edges come from regex-based import scanning (heuristic confidence), so "
+        "this is a best-effort trace, not a verified call graph."
+    )
+    return sentence
+
+
 def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     owner, name = (parse_github_url(url) if url else ("", repo_path.name))
     branch, commit_sha = "", ""
@@ -758,6 +869,7 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     findings = generate_findings(files, manifests)
     modules = group_into_modules(files, manifests)
     nodes, edges = build_graph(repo_path, files, manifests, modules)
+    flows = detect_flows(nodes, edges, modules)
 
     repo_info = RepoInfo(
         provider="github" if url else "local",
@@ -766,7 +878,7 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     return RepoIndex(
         repo=repo_info, files=files, language_counts=language_counts,
         manifests=manifests, findings=findings, modules=modules,
-        nodes=nodes, edges=edges,
+        nodes=nodes, edges=edges, flows=flows,
     )
 
 

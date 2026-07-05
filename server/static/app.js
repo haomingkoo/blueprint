@@ -20,6 +20,7 @@ const statusEl = document.getElementById("status");
 const reportEl = document.getElementById("report");
 const viewTabs = document.getElementById("view-tabs");
 const graphViewEl = document.getElementById("graph-view");
+const flowViewEl = document.getElementById("flow-view");
 
 form.addEventListener("submit", onSubmit);
 viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
@@ -46,6 +47,7 @@ async function onSubmit(event) {
     setIdle();
     renderReport(data);
     if (window.BlueprintGraph) window.BlueprintGraph.render(data);
+    if (window.BlueprintFlowView) window.BlueprintFlowView.render(data);
     viewTabs.hidden = false;
     setActiveView("report");
   } catch (err) {
@@ -73,10 +75,12 @@ function setActiveView(view) {
   });
   reportEl.hidden = view !== "report";
   graphViewEl.hidden = view !== "graph";
-  // The graph's own initial fit-to-view runs while this tab is still
-  // hidden (zero-size container), so it's a no-op then — re-fit now that
-  // the SVG has real dimensions.
+  flowViewEl.hidden = view !== "flow";
+  // Each graph instance's own initial fit-to-view runs while its tab is
+  // still hidden (zero-size container), so it's a no-op then — re-fit now
+  // that the SVG has real dimensions.
   if (view === "graph" && window.BlueprintGraph) window.BlueprintGraph.fit();
+  if (view === "flow" && window.BlueprintFlowGraph) window.BlueprintFlowGraph.fit();
 }
 
 function setIdle() {
