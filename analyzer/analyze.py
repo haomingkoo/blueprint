@@ -165,6 +165,8 @@ def _is_test_file(rel_path: Path) -> bool:
     name = rel_path.name
     if name.startswith("test_") or name.endswith("_test.py") or name.endswith(TEST_FILE_SUFFIXES):
         return True
+    if rel_path.stem in {"test", "tests"}:
+        return True
     return any(part in TEST_DIR_NAMES for part in rel_path.parts[:-1])
 
 
