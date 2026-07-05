@@ -57,7 +57,37 @@
     <div id="status" class="status" role="status" aria-live="polite"></div>
   </section>
 
+  <div id="view-tabs" class="view-tabs" hidden>
+    <button type="button" class="view-tab is-active" data-view="report">Report</button>
+    <button type="button" class="view-tab" data-view="graph">Architecture Graph</button>
+  </div>
+
   <section id="report" class="report" aria-live="polite"></section>
+
+  <section id="graph-view" class="graph-view" hidden aria-label="Architecture graph">
+    <div class="graph-toolbar">
+      <input
+        id="graph-search"
+        type="search"
+        class="graph-search-input"
+        placeholder="Search nodes by label…"
+        aria-label="Search graph nodes"
+      />
+      <div id="graph-filters" class="graph-filters"></div>
+      <div class="graph-zoom-controls">
+        <button type="button" id="graph-zoom-out" class="graph-zoom-button" aria-label="Zoom out">&minus;</button>
+        <button type="button" id="graph-zoom-in" class="graph-zoom-button" aria-label="Zoom in">+</button>
+        <button type="button" id="graph-zoom-fit" class="graph-zoom-button graph-zoom-fit" aria-label="Fit to view">Fit</button>
+      </div>
+    </div>
+    <div class="graph-canvas-wrap">
+      <svg id="graph-svg" class="graph-svg" role="img" aria-label="Repository architecture graph"></svg>
+      <p id="graph-empty-note" class="empty-note graph-empty-note" hidden>
+        No nodes detected for this repository.
+      </p>
+      <aside id="graph-drawer" class="graph-drawer" hidden></aside>
+    </div>
+  </section>
 </main>
 
 <footer class="site-footer">
@@ -68,6 +98,8 @@
   <p class="empty-note">None detected.</p>
 </template>
 
+<script src="/vendor/dagre.min.js"></script>
+<script src="/graph.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

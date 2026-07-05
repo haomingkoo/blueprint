@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import subprocess
 import tempfile
 import tomllib
@@ -143,6 +144,32 @@ class Module:
 
 
 @dataclass
+class Node:
+    """A node in the architecture graph (PRD MVP Data Model). Slice 6 only
+    emits two node types: `"module"` (one per `Module`) and `"dependency"`
+    (one per parsed `Manifest`) — see `build_graph`."""
+    id: str
+    label: str
+    type: str
+    file_paths: list[str]
+    evidence: list[str]
+    confidence: str
+
+
+@dataclass
+class Edge:
+    """An edge in the architecture graph. Slice 6 only emits `"imports"`
+    (module -> module) and `"depends_on"` (module -> dependency) edges,
+    detected by cheap regex import scanning — see `build_graph`."""
+    source: str
+    target: str
+    type: str
+    label: str
+    evidence: list[str]
+    confidence: str
+
+
+@dataclass
 class RepoIndex:
     repo: RepoInfo
     files: list[FileInfo]
@@ -150,6 +177,8 @@ class RepoIndex:
     manifests: list[Manifest] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     modules: list[Module] = field(default_factory=list)
+    nodes: list[Node] = field(default_factory=list)
+    edges: list[Edge] = field(default_factory=list)
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
@@ -509,6 +538,211 @@ def _module_inference_sentence(name: str) -> str:
     return f"Based on its directory name, this looks like the project's {purpose} (inferred from naming, not verified)."
 
 
+# Node confidence: modules/manifests are real, already-parsed facts (a
+# directory with N files exists; a manifest was parsed at this path) — not a
+# guess. Edge confidence is "heuristic": edges come from regex text scanning
+# (see below), not a real import resolver, so false negatives/positives are
+# possible and must be labeled honestly rather than presented as certain.
+NODE_CONFIDENCE = "structural"
+EDGE_CONFIDENCE = "heuristic"
+
+_JS_LANGUAGES = {"JavaScript", "TypeScript"}
+_PYTHON_MANIFEST_KINDS = {"python-pyproject", "python-requirements", "python-setuptools"}
+
+# Regex-based import scanning only — no AST, no module resolver. Cheap and
+# necessarily imperfect (e.g. a commented-out `import` line can still match);
+# an edge is only ever emitted when the specifier resolves to a real module
+# name or a real manifest dependency (see `_resolve_js_import`/
+# `_resolve_python_import`), so false positives from the regex itself can
+# only ever produce a dropped edge, never a fabricated one.
+_JS_IMPORT_RE = re.compile(r"""import\s+(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]""")
+_JS_REQUIRE_RE = re.compile(r"""require\(\s*['"]([^'"]+)['"]\s*\)""")
+_PY_IMPORT_RE = re.compile(r"^\s*import\s+(.+)$", re.MULTILINE)
+_PY_FROM_IMPORT_RE = re.compile(r"^\s*from\s+([\w.]+)\s+import\s+", re.MULTILINE)
+
+
+def build_graph(
+    repo_path: Path, files: list[FileInfo], manifests: list[Manifest], modules: list[Module]
+) -> tuple[list[Node], list[Edge]]:
+    """The Slice 6 architecture graph: one `Node` per `Module` (type
+    "module") and one `Node` per `Manifest` (type "dependency"), plus
+    `Edge`s for import/dependency relationships detected by cheap regex
+    scanning of JS/TS/Python source already present in `files`. Every edge's
+    evidence is the real file path(s) the matching import text was found in;
+    an import that can't be resolved to a known module or manifest dependency
+    is dropped rather than guessed at."""
+    nodes = _build_module_nodes(modules) + _build_manifest_nodes(manifests)
+    edges = _detect_import_edges(repo_path, files, modules, manifests)
+    return nodes, edges
+
+
+def _build_module_nodes(modules: list[Module]) -> list[Node]:
+    return [
+        Node(
+            id=f"module:{m.name}", label=m.name, type="module",
+            file_paths=list(m.key_files), evidence=list(m.key_files),
+            confidence=NODE_CONFIDENCE,
+        )
+        for m in modules
+    ]
+
+
+def _build_manifest_nodes(manifests: list[Manifest]) -> list[Node]:
+    return [
+        Node(
+            id=f"manifest:{m.path}", label=m.name or m.path, type="dependency",
+            file_paths=[m.path], evidence=[m.path], confidence=NODE_CONFIDENCE,
+        )
+        for m in manifests
+    ]
+
+
+def _detect_import_edges(
+    repo_path: Path, files: list[FileInfo], modules: list[Module], manifests: list[Manifest]
+) -> list[Edge]:
+    module_names = {m.name for m in modules}
+    manifests_by_language = _manifests_by_language(manifests)
+    evidence_by_edge: dict[tuple[str, str, str], set[str]] = {}
+
+    for f in files:
+        source_module = _module_name_for_path(f.path)
+        for specifier in _extract_import_specifiers(repo_path, f):
+            target = _resolve_import_target(f, specifier, module_names, manifests_by_language)
+            if target is None or target == ("module", source_module):
+                continue
+            kind, key = target
+            edge_type = "imports" if kind == "module" else "depends_on"
+            target_id = f"module:{key}" if kind == "module" else f"manifest:{key}"
+            edge_key = (f"module:{source_module}", target_id, edge_type)
+            evidence_by_edge.setdefault(edge_key, set()).add(f.path)
+
+    return [
+        Edge(
+            source=source, target=target_id, type=edge_type,
+            label="imports" if edge_type == "imports" else "depends on",
+            evidence=sorted(evidence), confidence=EDGE_CONFIDENCE,
+        )
+        for (source, target_id, edge_type), evidence in sorted(evidence_by_edge.items())
+    ]
+
+
+def _module_name_for_path(path: str) -> str:
+    parts = Path(path).parts
+    return parts[0] if len(parts) > 1 else ROOT_MODULE_NAME
+
+
+def _manifests_by_language(manifests: list[Manifest]) -> dict[str, list[Manifest]]:
+    return {
+        "npm": [m for m in manifests if m.kind == "npm"],
+        "python": [m for m in manifests if m.kind in _PYTHON_MANIFEST_KINDS],
+    }
+
+
+def _extract_import_specifiers(repo_path: Path, f: FileInfo) -> list[str]:
+    if f.language not in _JS_LANGUAGES and f.language != "Python":
+        return []
+    text = _read_text_safely(repo_path / f.path)
+    if f.language == "Python":
+        return _extract_python_imports(text)
+    return _extract_js_imports(text)
+
+
+def _read_text_safely(path: Path) -> str:
+    try:
+        return path.read_text(errors="ignore")
+    except OSError:
+        return ""
+
+
+def _extract_js_imports(text: str) -> list[str]:
+    return [m.group(1) for m in _JS_IMPORT_RE.finditer(text)] + [
+        m.group(1) for m in _JS_REQUIRE_RE.finditer(text)
+    ]
+
+
+def _extract_python_imports(text: str) -> list[str]:
+    names = []
+    for match in _PY_IMPORT_RE.finditer(text):
+        body = match.group(1).split("#", 1)[0]
+        for part in body.split(","):
+            piece = part.strip().split(" as ")[0].strip()
+            if piece:
+                names.append(piece)
+    for match in _PY_FROM_IMPORT_RE.finditer(text):
+        names.append(match.group(1).strip())
+    return names
+
+
+def _resolve_import_target(
+    f: FileInfo, specifier: str, module_names: set[str], manifests_by_language: dict[str, list[Manifest]],
+) -> tuple[str, str] | None:
+    if f.language in _JS_LANGUAGES:
+        return _resolve_js_import(f.path, specifier, module_names, manifests_by_language["npm"])
+    return _resolve_python_import(specifier, module_names, manifests_by_language["python"])
+
+
+def _resolve_js_import(
+    importer_path: str, specifier: str, module_names: set[str], npm_manifests: list[Manifest],
+) -> tuple[str, str] | None:
+    if specifier.startswith((".", "/")):
+        target_module = _module_name_for_path(_resolve_relative_import(importer_path, specifier))
+        return ("module", target_module) if target_module in module_names else None
+    package_name = _js_package_name(specifier)
+    for manifest in npm_manifests:
+        if package_name in manifest.dependencies:
+            return ("manifest", manifest.path)
+    return None
+
+
+def _js_package_name(specifier: str) -> str:
+    parts = specifier.split("/")
+    if specifier.startswith("@") and len(parts) > 1:
+        return "/".join(parts[:2])
+    return parts[0]
+
+
+def _resolve_relative_import(importer_path: str, specifier: str) -> str:
+    """Resolve a relative JS/TS import specifier against the importing
+    file's directory into a repo-relative path string (no extension
+    guessing — only the resulting top-level directory name is used, by
+    `_module_name_for_path`)."""
+    segments = list(Path(importer_path).parent.parts)
+    for part in specifier.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if segments:
+                segments.pop()
+        else:
+            segments.append(part)
+    return "/".join(segments)
+
+
+def _resolve_python_import(
+    specifier: str, module_names: set[str], python_manifests: list[Manifest],
+) -> tuple[str, str] | None:
+    if specifier.startswith("."):
+        return None  # relative import: assumed same-package, no cross-module edge inferred
+    top_level = specifier.split(".")[0]
+    if top_level in module_names:
+        return ("module", top_level)
+    for manifest in python_manifests:
+        if top_level.lower() in _python_dependency_names(manifest):
+            return ("manifest", manifest.path)
+    return None
+
+
+def _python_dependency_names(manifest: Manifest) -> set[str]:
+    return {_strip_version_pin(dep).lower() for dep in manifest.dependencies}
+
+
+def _strip_version_pin(dependency: str) -> str:
+    for marker in VERSION_PIN_MARKERS:
+        if marker in dependency:
+            return dependency.split(marker)[0].strip()
+    return dependency.strip()
+
+
 def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     owner, name = (parse_github_url(url) if url else ("", repo_path.name))
     branch, commit_sha = "", ""
@@ -523,6 +757,7 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     manifests = extract_manifests(repo_path, files)
     findings = generate_findings(files, manifests)
     modules = group_into_modules(files, manifests)
+    nodes, edges = build_graph(repo_path, files, manifests, modules)
 
     repo_info = RepoInfo(
         provider="github" if url else "local",
@@ -531,6 +766,7 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     return RepoIndex(
         repo=repo_info, files=files, language_counts=language_counts,
         manifests=manifests, findings=findings, modules=modules,
+        nodes=nodes, edges=edges,
     )
 
 

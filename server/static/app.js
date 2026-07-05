@@ -18,8 +18,13 @@ const input = document.getElementById("repo-url");
 const button = document.getElementById("analyze-button");
 const statusEl = document.getElementById("status");
 const reportEl = document.getElementById("report");
+const viewTabs = document.getElementById("view-tabs");
+const graphViewEl = document.getElementById("graph-view");
 
 form.addEventListener("submit", onSubmit);
+viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
+  tab.addEventListener("click", () => setActiveView(tab.dataset.view));
+});
 
 async function onSubmit(event) {
   event.preventDefault();
@@ -40,6 +45,9 @@ async function onSubmit(event) {
     }
     setIdle();
     renderReport(data);
+    if (window.BlueprintGraph) window.BlueprintGraph.render(data);
+    viewTabs.hidden = false;
+    setActiveView("report");
   } catch (err) {
     setError("Could not reach the analyzer. Check the server is running and try again.");
   }
@@ -48,6 +56,7 @@ async function onSubmit(event) {
 function setLoading() {
   button.disabled = true;
   reportEl.replaceChildren();
+  viewTabs.hidden = true;
   statusEl.replaceChildren(
     el("div", { className: "status-loading" }, [
       document.createTextNode(
@@ -56,6 +65,18 @@ function setLoading() {
     ]),
     el("div", { className: "scan-bar" })
   );
+}
+
+function setActiveView(view) {
+  viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
+    tab.classList.toggle("is-active", tab.dataset.view === view);
+  });
+  reportEl.hidden = view !== "report";
+  graphViewEl.hidden = view !== "graph";
+  // The graph's own initial fit-to-view runs while this tab is still
+  // hidden (zero-size container), so it's a no-op then — re-fit now that
+  // the SVG has real dimensions.
+  if (view === "graph" && window.BlueprintGraph) window.BlueprintGraph.fit();
 }
 
 function setIdle() {
