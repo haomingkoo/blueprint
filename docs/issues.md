@@ -132,6 +132,9 @@ Acceptance criteria:
 
 - Copy Mermaid for the current graph or selected flow.
 - Copy Markdown for overview, start-here guide, and review report.
+- Download a single self-contained HTML file of the full rendered report
+  (styles inlined, no external requests) — so it can be sent to someone or
+  opened offline without running the app.
 - Export includes repo URL and commit SHA.
 
 Skipped for now: PDF, advanced PNG styling.
