@@ -1,15 +1,18 @@
 """Analyze a public GitHub repo (or local path) into structured JSON facts.
 
-Issue 1: Repo, File, and language-count facts only. No dependency/manifest
-parsing yet — that's Issue 2.
+Issue 1 built Repo, File, and language-count facts. Issue 2 adds manifest
+detection (package.json, pyproject.toml, requirements.txt, setup.py) and
+per-file role classification (entrypoint/test/config/docs/unclassified).
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import subprocess
 import tempfile
-from dataclasses import asdict, dataclass
+import tomllib
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 IGNORED_DIRS = {
@@ -23,6 +26,29 @@ LANGUAGE_BY_EXT = {
     ".md": "Markdown", ".json": "JSON", ".yml": "YAML", ".yaml": "YAML",
     ".html": "HTML", ".css": "CSS", ".scss": "SCSS", ".sh": "Shell",
 }
+
+MANIFEST_FILENAMES = {"package.json", "pyproject.toml", "requirements.txt", "setup.py"}
+
+CONFIG_FILENAMES = {
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml", ".env", ".env.example",
+    "tsconfig.json", ".eslintrc", ".eslintrc.json", ".eslintrc.js", "Makefile",
+    ".gitignore", "tox.ini", "pytest.ini",
+}
+
+ENTRYPOINT_FILENAMES = {
+    "main.py", "app.py", "cli.py", "__main__.py", "manage.py", "wsgi.py", "asgi.py",
+    "index.js", "index.ts", "main.js", "main.ts", "server.js", "server.ts",
+    "app.js", "app.ts",
+}
+
+DOCS_FILENAME_PREFIXES = ("README", "CHANGELOG", "LICENSE", "CONTRIBUTING", "CODE_OF_CONDUCT")
+
+TEST_FILE_SUFFIXES = (
+    ".test.js", ".test.ts", ".test.jsx", ".test.tsx",
+    ".spec.js", ".spec.ts", ".spec.jsx", ".spec.tsx",
+)
+
+TEST_DIR_NAMES = {"tests", "test", "__tests__"}
 
 
 @dataclass
@@ -40,6 +66,16 @@ class FileInfo:
     path: str
     language: str
     size: int
+    role: str = "unclassified"
+
+
+@dataclass
+class Manifest:
+    path: str
+    kind: str
+    name: str
+    dependencies: list[str]
+    scripts: dict[str, str]
 
 
 @dataclass
@@ -47,6 +83,7 @@ class RepoIndex:
     repo: RepoInfo
     files: list[FileInfo]
     language_counts: dict[str, int]
+    manifests: list[Manifest] = field(default_factory=list)
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
@@ -76,8 +113,125 @@ def scan_files(repo_path: Path) -> list[FileInfo]:
         if any(part in IGNORED_DIRS for part in rel.parts):
             continue
         language = LANGUAGE_BY_EXT.get(path.suffix, "Other")
-        files.append(FileInfo(path=str(rel), language=language, size=path.stat().st_size))
+        files.append(FileInfo(
+            path=str(rel), language=language, size=path.stat().st_size,
+            role=classify_role(rel),
+        ))
     return files
+
+
+def classify_role(rel_path: Path) -> str:
+    """Mark a file's likely role from its path alone (evidence = the path itself)."""
+    if rel_path.name in MANIFEST_FILENAMES or rel_path.name in CONFIG_FILENAMES:
+        return "config"
+    if _is_test_file(rel_path):
+        return "test"
+    if _is_docs_file(rel_path):
+        return "docs"
+    if rel_path.name in ENTRYPOINT_FILENAMES:
+        return "entrypoint"
+    return "unclassified"
+
+
+def _is_test_file(rel_path: Path) -> bool:
+    name = rel_path.name
+    if name.startswith("test_") or name.endswith("_test.py") or name.endswith(TEST_FILE_SUFFIXES):
+        return True
+    return any(part in TEST_DIR_NAMES for part in rel_path.parts[:-1])
+
+
+def _is_docs_file(rel_path: Path) -> bool:
+    if rel_path.suffix in {".md", ".rst"}:
+        return True
+    if "docs" in rel_path.parts[:-1]:
+        return True
+    return rel_path.name.upper().startswith(DOCS_FILENAME_PREFIXES)
+
+
+def extract_manifests(repo_path: Path, files: list[FileInfo]) -> list[Manifest]:
+    """Parse the manifest files present in `files`. Best-effort: a malformed
+    manifest is still reported (path + kind) with empty deps/scripts rather
+    than crashing the whole analysis."""
+    parsers = {
+        "package.json": _parse_package_json,
+        "pyproject.toml": _parse_pyproject_toml,
+        "requirements.txt": _parse_requirements_txt,
+        "setup.py": _parse_setup_py,
+    }
+    manifests = []
+    for f in files:
+        parser = parsers.get(Path(f.path).name)
+        if parser is not None:
+            manifests.append(parser(repo_path / f.path, f.path))
+    return manifests
+
+
+def _parse_package_json(abs_path: Path, rel_path: str) -> Manifest:
+    try:
+        data = json.loads(abs_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    dependencies = sorted({**data.get("dependencies", {}), **data.get("devDependencies", {})})
+    scripts = data.get("scripts") if isinstance(data.get("scripts"), dict) else {}
+    return Manifest(
+        path=rel_path, kind="npm", name=data.get("name", ""),
+        dependencies=dependencies, scripts=scripts,
+    )
+
+
+def _parse_pyproject_toml(abs_path: Path, rel_path: str) -> Manifest:
+    try:
+        data = tomllib.loads(abs_path.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        data = {}
+    project = data.get("project", {})
+    poetry = data.get("tool", {}).get("poetry", {})
+    dependencies = list(project.get("dependencies", [])) or sorted(
+        name for name in poetry.get("dependencies", {}) if name != "python"
+    )
+    scripts = project.get("scripts") or poetry.get("scripts") or {}
+    name = project.get("name") or poetry.get("name") or ""
+    return Manifest(
+        path=rel_path, kind="python-pyproject", name=name,
+        dependencies=dependencies, scripts=scripts,
+    )
+
+
+def _parse_requirements_txt(abs_path: Path, rel_path: str) -> Manifest:
+    try:
+        lines = abs_path.read_text().splitlines()
+    except OSError:
+        lines = []
+    dependencies = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+    return Manifest(path=rel_path, kind="python-requirements", name="", dependencies=dependencies, scripts={})
+
+
+def _parse_setup_py(abs_path: Path, rel_path: str) -> Manifest:
+    name, dependencies = "", []
+    try:
+        tree = ast.parse(abs_path.read_text())
+        call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call) and _is_setup_call(node))
+        name, dependencies = _setup_call_kwargs(call)
+    except (OSError, SyntaxError, StopIteration):
+        pass
+    return Manifest(path=rel_path, kind="python-setuptools", name=name, dependencies=dependencies, scripts={})
+
+
+def _is_setup_call(node: ast.Call) -> bool:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == "setup"
+    return isinstance(func, ast.Attribute) and func.attr == "setup"
+
+
+def _setup_call_kwargs(call: ast.Call) -> tuple[str, list[str]]:
+    name, dependencies = "", []
+    for kw in call.keywords:
+        if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+            name = kw.value.value
+        if kw.arg == "install_requires" and isinstance(kw.value, ast.List):
+            dependencies = [elt.value for elt in kw.value.elts if isinstance(elt, ast.Constant)]
+    return name, dependencies
 
 
 def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
@@ -91,12 +245,13 @@ def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     language_counts: dict[str, int] = {}
     for f in files:
         language_counts[f.language] = language_counts.get(f.language, 0) + 1
+    manifests = extract_manifests(repo_path, files)
 
     repo_info = RepoInfo(
         provider="github" if url else "local",
         owner=owner, name=name, branch=branch, commit_sha=commit_sha, url=url,
     )
-    return RepoIndex(repo=repo_info, files=files, language_counts=language_counts)
+    return RepoIndex(repo=repo_info, files=files, language_counts=language_counts, manifests=manifests)
 
 
 def analyze_github_repo(url: str) -> RepoIndex:
