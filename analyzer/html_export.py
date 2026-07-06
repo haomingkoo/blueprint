@@ -28,16 +28,13 @@ FINDING_CATEGORIES = [
     ("dependency-risk", "Dependency Risk"),
 ]
 
-# System font stack only -- no @font-face/url()/CDN link, so this document
-# has zero network dependency when opened via file://.
-_CSS = """
+# System font stack only -- no @font-face/url()/CDN link, so any document
+# built from BASE_CSS has zero network dependency when opened via file://.
+# Shared by this module's standalone report export and the understand-repo
+# skill's site_builder.py -- the dark "blueprint" palette/typography lives
+# in exactly one place, each caller adds only its own extra rules.
+BASE_CSS = """
 :root { color-scheme: dark; }
-body {
-  margin: 0; padding: 2.5rem 1.5rem 4rem; max-width: 860px; margin-inline: auto;
-  background: #060b16; color: #eef4ff;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1.6;
-}
 h1, h2, h3 {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   color: #eef4ff;
@@ -52,13 +49,7 @@ code {
   padding: 0.1rem 0.4rem; font-size: 0.86rem; color: #9fe8ff;
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
-ul { padding-left: 1.4rem; }
 .card { border: 1px solid #24406b; border-radius: 3px; padding: 1rem 1.1rem; margin-bottom: 0.9rem; background: #0e2038; }
-.finding { border-left: 3px solid #8fa3c7; }
-.finding[data-severity="critical"] { border-left-color: #ff5d7a; }
-.finding[data-severity="high"] { border-left-color: #ff8a5b; }
-.finding[data-severity="medium"] { border-left-color: #ffc266; }
-.finding[data-severity="low"] { border-left-color: #6fd7a3; }
 .badge {
   font-family: ui-monospace, monospace; font-size: 0.75rem; text-transform: uppercase;
   letter-spacing: 0.04em; color: #7d93bd; border: 1px solid #24406b; border-radius: 999px;
@@ -66,6 +57,21 @@ ul { padding-left: 1.4rem; }
 }
 .empty { font-style: italic; color: #5d7396; }
 footer { margin-top: 3rem; font-size: 0.8rem; color: #5d7396; font-family: ui-monospace, monospace; }
+"""
+
+_CSS = BASE_CSS + """
+body {
+  margin: 0; padding: 2.5rem 1.5rem 4rem; max-width: 860px; margin-inline: auto;
+  background: #060b16; color: #eef4ff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+}
+ul { padding-left: 1.4rem; }
+.finding { border-left: 3px solid #8fa3c7; }
+.finding[data-severity="critical"] { border-left-color: #ff5d7a; }
+.finding[data-severity="high"] { border-left-color: #ff8a5b; }
+.finding[data-severity="medium"] { border-left-color: #ffc266; }
+.finding[data-severity="low"] { border-left-color: #6fd7a3; }
 """
 
 

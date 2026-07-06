@@ -15,24 +15,27 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from pathlib import Path
+
+from db import open_db
 
 
 def add_edge_description(
     db_path: Path, source: str, target: str, description: str, evidence_files: list[str]
 ) -> None:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         sweep_id = conn.execute("SELECT id FROM sweeps LIMIT 1").fetchone()[0]
+        # OR REPLACE: re-adding a description for the same edge (e.g.
+        # corrected after an earlier attempt) deterministically replaces
+        # it, rather than leaving two rows whose read order is an
+        # unordered-scan artifact.
         conn.execute(
-            "INSERT INTO edge_descriptions (sweep_id, source, target, description, evidence_files, confidence) "
+            "INSERT OR REPLACE INTO edge_descriptions "
+            "(sweep_id, source, target, description, evidence_files, confidence) "
             "VALUES (?, ?, ?, ?, ?, 'semantic')",
             (sweep_id, source, target, description, json.dumps(evidence_files)),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def load_edges_with_descriptions(db_path: Path) -> list[dict]:
@@ -40,14 +43,11 @@ def load_edges_with_descriptions(db_path: Path) -> list[dict]:
     survived this sweep -- used by report/site renderers so a described
     edge shows its sentence and an undescribed one shows its plain label,
     never the other way around."""
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         edge_rows = conn.execute("SELECT source, target, type, label FROM edges").fetchall()
         description_rows = conn.execute(
             "SELECT source, target, description, evidence_files FROM edge_descriptions"
         ).fetchall()
-    finally:
-        conn.close()
 
     descriptions = {(s, t): (desc, json.loads(ev)) for s, t, desc, ev in description_rows}
     result = []

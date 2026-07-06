@@ -361,3 +361,70 @@ Decisions made this slice (not in `docs/prd-understand-repo.md` yet — this who
 - **This slice exists at all because of a mid-session comparison against a reference tool ("archmap")**, not because it was pre-planned in `docs/prd-understand-repo.md`. Two other gaps surfaced from that same comparison — visual subsystem grouping/layering and an overview panel inside Blueprint's *live* web app (`server/static/`), plus Slice 9's still-unbuilt sweep-history UI — were explicitly deferred to a later slice, not attempted here.
 
 Next slice starts from: unifying the live web app (`server/static/graph.js`) with this skill's subsystem/semantic layer — a `subsystem_id` field on `Node`, a bounding-box-per-subsystem renderer in `graph.js` (currently a flat graph with zero grouping concept anywhere in the pipeline), an overview panel next to the canvas fed by the Phase 3 synthesis narrative, and Slice 9's still-unbuilt sweep-history list (reopen a past `.understanding/` sweep without re-analyzing).
+
+## Post-Slice-14: Code review fixes — done 2026-07-06
+
+Slices 10-14 above shipped without ever having been reviewed — a 10-angle
+automated review (line-by-line, removed-behavior, cross-file, language
+pitfalls, wrapper correctness, reuse, simplification, efficiency,
+altitude, CLAUDE.md conventions) plus manual verification surfaced 15 real
+findings, all fixed this pass:
+
+- **Security**: `SKILL.md` documented building shell commands by
+  substituting LLM-written/repo-derived text directly into quoted CLI
+  args — a command-injection path if a swept repo contained hostile
+  content. `semantic.py add`, `edges.py add`, and `synthesis.py
+  update-subsystem`/`set-overview` now take a JSON payload file path
+  instead; free-form text never touches shell quoting. `SKILL.md` updated
+  to match.
+- **Phase 4 was write-only**: `synthesis.py`'s `render_full_report` and
+  `site_builder.py`'s `load_sweep_data` never read `edge_descriptions` —
+  verified per-edge descriptions were persisted but never shown anywhere.
+  Both now use `edges.load_edges_with_descriptions`; `report.md` gains an
+  "Edge Descriptions — verified" section, and described edges show their
+  sentence in place of the generic label on the site.
+- **Subsystem id never printed**: `sweep.py`'s `_print_subsystems` only
+  showed name/modules, but Phase 3's `update-subsystem` command requires
+  the real id — following the docs as written could silently target the
+  wrong subsystem. Now printed as `[subsystem-id] name (...)`.
+- **`site.py` renamed to `site_builder.py`** — the old name shadowed
+  Python's stdlib `site` module (always pre-imported at interpreter
+  startup), which is why it was the only script in this feature with zero
+  automated tests; `test_slice13.py` added now that it's importable.
+- **Slug collisions**: two subsystems whose names differed only by
+  case/punctuation (or one literally named "index") could silently
+  overwrite another page, including the site's own homepage.
+  `site_builder.py` now assigns each subsystem a guaranteed-unique slug
+  (`_assign_unique_slugs`, reserves `"index"`) and caps slug length so an
+  oversized merged-subsystem name can't exceed the OS filename limit.
+- **`latest` symlink race**: check-then-unlink-then-create was three
+  separate syscalls; now a single atomic `os.replace` over a temp symlink.
+- **Last-write-wins on re-added claims**: `semantic_summaries`/
+  `edge_descriptions` had no uniqueness constraint, so which duplicate
+  "won" depended on SQLite's unordered scan order. Both tables now have a
+  `UNIQUE` constraint and every insert is `INSERT OR REPLACE`.
+- **Bad `sweep_dir` silently created a stray empty db**: every script
+  called `sqlite3.connect` with no existence check, so a typo'd path
+  created a 0-byte file before crashing on the next query with a raw
+  traceback. New shared `db.py` (`open_db`, a context manager) raises a
+  clean `SweepNotFoundError` instead, used by every script except
+  `sweep.py` itself (the one legitimate creator of a new sweep).
+- **Cleanup**: `sweep.py`'s duplicated `_module_name_for_path` now imports
+  `analyze.py`'s own (renamed public, `module_name_for_path`) instead of
+  reimplementing it; the repeated `sqlite3.connect`/`try`/`finally`
+  boilerplate across 4 files collapsed into `db.py`'s `open_db` context
+  manager; `site_builder.py`'s hand-copied CSS now imports
+  `html_export.BASE_CSS` (split out of `analyzer/html_export.py`, which
+  keeps its own report-specific rules on top) instead of duplicating the
+  palette; its Mermaid label-escaping now imports `mermaid.escape_label`
+  (renamed public) instead of a second copy of the same one-line function.
+
+Verified: `python3 -m pytest analyzer server .claude/skills/understand-repo/scripts -q` — 70 passed. `uvx ruff check` clean. `uvx ty check` (with `server/requirements.txt` installed) — same 2 pre-existing baseline diagnostics as every prior slice. Full 5-phase pipeline re-run end-to-end in a throwaway fixture repo (sweep → semantic → synthesis → edges → site_builder) confirming subsystem ids print, the payload-file CLI works for all three scripts, and a verified edge description reaches both `report.md` and the generated HTML.
+
+Not fixed (flagged, not code-fixable without a larger redesign): the
+"only verified claims survive" guarantee is still enforced by convention
+(SKILL.md's instructions to whichever agent calls `semantic.py add`/
+`edges.py add`), not by the persistence layer itself — there's no code
+check that an actual Agent-B refutation attempt happened before a claim
+is written. Revisit only as part of a real orchestration redesign, not a
+quick patch.

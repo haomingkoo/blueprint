@@ -128,7 +128,7 @@ architectural weight (e.g. cross-module imports), not every trivial one.
 ## Phase 5: multi-page HTML site (Slice 13)
 
 ```bash
-python3 .claude/skills/understand-repo/scripts/site.py <sweep_dir>
+python3 .claude/skills/understand-repo/scripts/site_builder.py <sweep_dir>
 ```
 
 Builds `site/index.html` (repo overview + a **clickable Mermaid diagram**

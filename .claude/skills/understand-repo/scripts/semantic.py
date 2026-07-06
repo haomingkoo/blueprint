@@ -15,28 +15,28 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from pathlib import Path
+
+from db import open_db
 
 
 def add_semantic_summary(db_path: Path, module_name: str, summary_text: str, evidence_files: list[str]) -> None:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         sweep_id = conn.execute("SELECT id FROM sweeps LIMIT 1").fetchone()[0]
+        # OR REPLACE: re-adding a claim for a module (e.g. corrected after
+        # an earlier attempt) deterministically replaces it, rather than
+        # leaving two rows whose read order is an unordered-scan artifact.
         conn.execute(
-            "INSERT INTO semantic_summaries "
+            "INSERT OR REPLACE INTO semantic_summaries "
             "(sweep_id, module_name, summary_text, evidence_files, verified, confidence) "
             "VALUES (?, ?, ?, ?, 1, 'semantic')",
             (sweep_id, module_name, summary_text, json.dumps(evidence_files)),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def render_semantic_report(db_path: Path) -> str:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         module_names = sorted({
             row[0] for row in conn.execute("SELECT DISTINCT module_name FROM module_subsystem")
         })
@@ -46,8 +46,6 @@ def render_semantic_report(db_path: Path) -> str:
                 "SELECT module_name, summary_text, evidence_files FROM semantic_summaries"
             )
         }
-    finally:
-        conn.close()
 
     lines = ["# AI Interpretation — verified", ""]
     for name in module_names:

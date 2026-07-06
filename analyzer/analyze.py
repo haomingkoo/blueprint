@@ -625,7 +625,7 @@ def _detect_import_edges(
     evidence_by_edge: dict[tuple[str, str, str], set[str]] = {}
 
     for f in files:
-        source_module = _module_name_for_path(f.path)
+        source_module = module_name_for_path(f.path)
         for specifier in _extract_import_specifiers(repo_path, f):
             target = _resolve_import_target(f, specifier, module_names, manifests_by_language)
             if target is None or target == ("module", source_module):
@@ -646,7 +646,7 @@ def _detect_import_edges(
     ]
 
 
-def _module_name_for_path(path: str) -> str:
+def module_name_for_path(path: str) -> str:
     parts = Path(path).parts
     return parts[0] if len(parts) > 1 else ROOT_MODULE_NAME
 
@@ -705,7 +705,7 @@ def _resolve_js_import(
     importer_path: str, specifier: str, module_names: set[str], npm_manifests: list[Manifest],
 ) -> tuple[str, str] | None:
     if specifier.startswith((".", "/")):
-        target_module = _module_name_for_path(_resolve_relative_import(importer_path, specifier))
+        target_module = module_name_for_path(_resolve_relative_import(importer_path, specifier))
         return ("module", target_module) if target_module in module_names else None
     package_name = _js_package_name(specifier)
     for manifest in npm_manifests:
@@ -725,7 +725,7 @@ def _resolve_relative_import(importer_path: str, specifier: str) -> str:
     """Resolve a relative JS/TS import specifier against the importing
     file's directory into a repo-relative path string (no extension
     guessing — only the resulting top-level directory name is used, by
-    `_module_name_for_path`)."""
+    `module_name_for_path`)."""
     segments = list(Path(importer_path).parent.parts)
     for part in specifier.split("/"):
         if part in ("", "."):

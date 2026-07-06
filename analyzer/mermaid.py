@@ -57,7 +57,7 @@ def _repo_label(repo: RepoInfo) -> str:
 
 def _node_line(node: Node, safe_id: str) -> str:
     open_shape, close_shape = _NODE_SHAPE_BY_TYPE.get(node.type, _DEFAULT_NODE_SHAPE)
-    label = _escape_label(f"{node.type}: {node.label}")
+    label = escape_label(f"{node.type}: {node.label}")
     return f'    {safe_id}{open_shape}"{label}"{close_shape}'
 
 
@@ -71,12 +71,12 @@ def _edge_lines(edges: list[Edge], safe_ids: dict[str, str]) -> list[str]:
         if edge.source not in safe_ids or edge.target not in safe_ids:
             continue
         arrow = _EDGE_ARROW_BY_TYPE.get(edge.type, _DEFAULT_EDGE_ARROW)
-        label = _escape_label(edge.label)
+        label = escape_label(edge.label)
         lines.append(f'    {safe_ids[edge.source]} {arrow}|"{label}"| {safe_ids[edge.target]}')
     return lines
 
 
-def _escape_label(text: str) -> str:
+def escape_label(text: str) -> str:
     """Mermaid quoted-string labels can't contain a literal `"`; swap for a
     plain apostrophe rather than trying to escape it (Mermaid has no
     backslash-escape for quotes inside `"..."` labels)."""

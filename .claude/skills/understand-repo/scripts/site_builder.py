@@ -15,46 +15,35 @@ import html
 import json
 import re
 import shutil
-import sqlite3
+import sys
 from pathlib import Path
 
+from db import open_db
 from edges import load_edges_with_descriptions
+
+# scripts/site_builder.py -> understand-repo/ -> skills/ -> .claude/ -> repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_ANALYZER_DIR = _REPO_ROOT / "analyzer"
+if str(_ANALYZER_DIR) not in sys.path:
+    sys.path.insert(0, str(_ANALYZER_DIR))
+
+from html_export import BASE_CSS  # noqa: E402
+from mermaid import escape_label  # noqa: E402
 
 _E = html.escape
 VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 
 # Same dark "blueprint" palette as analyzer/html_export.py's existing
-# standalone report export -- reused, not reinvented, per the PRD.
-_CSS = """
-:root { color-scheme: dark; }
+# standalone report export -- imported as BASE_CSS above, not copy-pasted;
+# only this site's own extra rules are added here.
+_CSS = BASE_CSS + """
 body {
   margin: 0; padding: 2.5rem 1.5rem 4rem; max-width: 900px; margin-inline: auto;
   background: #060b16; color: #eef4ff;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.6;
 }
-h1, h2, h3 {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
-  color: #eef4ff;
-}
-h1 { font-size: 1.8rem; margin: 0 0 0.5rem; }
-h2 { font-size: 1.2rem; margin: 2rem 0 0.75rem; border-top: 1px dashed #24406b; padding-top: 1.5rem; }
-h2:first-of-type { border-top: none; padding-top: 0; }
-h3 { font-size: 1rem; margin: 1.25rem 0 0.5rem; color: #9fe8ff; }
-.meta { font-family: ui-monospace, monospace; color: #9fb3d1; font-size: 0.9rem; }
-code {
-  background: #0e2038; border: 1px solid #24406b; border-radius: 3px;
-  padding: 0.1rem 0.4rem; font-size: 0.86rem; color: #9fe8ff;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
-}
-.card { border: 1px solid #24406b; border-radius: 3px; padding: 1rem 1.1rem; margin-bottom: 0.9rem; background: #0e2038; }
-.badge {
-  font-family: ui-monospace, monospace; font-size: 0.75rem; text-transform: uppercase;
-  letter-spacing: 0.04em; color: #7d93bd; border: 1px solid #24406b; border-radius: 999px;
-  padding: 0.1rem 0.55rem; margin-left: 0.5rem;
-}
 .badge.verified { color: #6fd7a3; border-color: #2f6b4d; }
-.empty { font-style: italic; color: #5d7396; }
 .back { font-family: ui-monospace, monospace; font-size: 0.85rem; color: #9fe8ff; text-decoration: none; }
 .mermaid-wrap { background: #0e2038; border: 1px solid #24406b; border-radius: 3px; padding: 1rem; overflow-x: auto; }
 table.files { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
@@ -64,14 +53,35 @@ footer { margin-top: 3rem; font-size: 0.8rem; color: #5d7396; font-family: ui-mo
 """
 
 
+_MAX_SLUG_LENGTH = 80
+
+
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    slug = slug[:_MAX_SLUG_LENGTH].rstrip("-")
     return slug or "root"
 
 
+def _assign_unique_slugs(subsystems: list[dict]) -> None:
+    """Mutates each subsystem dict in place, adding a `slug` key that is
+    guaranteed unique across this sweep and never equal to `"index"` (the
+    site's own homepage) -- two subsystems whose names differ only in
+    case/punctuation, or a subsystem literally named "index", would
+    otherwise silently overwrite another page on disk."""
+    seen: set[str] = {"index"}
+    for s in subsystems:
+        base = _slugify(s["name"])
+        slug = base
+        suffix = 2
+        while slug in seen:
+            slug = f"{base}-{suffix}"
+            suffix += 1
+        seen.add(slug)
+        s["slug"] = slug
+
+
 def load_sweep_data(db_path: Path) -> dict:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         repo_name, overview = conn.execute("SELECT repo_name, overview FROM sweeps LIMIT 1").fetchone()
         subsystem_rows = conn.execute("SELECT id, name, narrative FROM subsystems ORDER BY name").fetchall()
         module_subsystem_rows = conn.execute("SELECT subsystem_id, module_name FROM module_subsystem").fetchall()
@@ -80,8 +90,6 @@ def load_sweep_data(db_path: Path) -> dict:
             "SELECT module_name, summary_text, evidence_files FROM semantic_summaries"
         ).fetchall()
         file_rows = conn.execute("SELECT module_name, path, role, language FROM module_files").fetchall()
-    finally:
-        conn.close()
     # Own connection (see load_edges_with_descriptions) -- joins in any
     # verified Phase 4 description so a described edge shows its sentence
     # instead of the plain structural label.
@@ -97,16 +105,19 @@ def load_sweep_data(db_path: Path) -> dict:
             {"path": path, "role": role, "language": language}
         )
 
+    subsystems = [
+        {
+            "id": sid, "name": name, "narrative": narrative,
+            "modules": sorted(modules_by_subsystem.get(sid, [])),
+        }
+        for sid, name, narrative in subsystem_rows
+    ]
+    _assign_unique_slugs(subsystems)
+
     return {
         "repo_name": repo_name,
         "overview": overview,
-        "subsystems": [
-            {
-                "id": sid, "name": name, "narrative": narrative,
-                "modules": sorted(modules_by_subsystem.get(sid, [])),
-            }
-            for sid, name, narrative in subsystem_rows
-        ],
+        "subsystems": subsystems,
         "subsystem_by_module": {m: s for s, m in module_subsystem_rows},
         "key_files_by_module": {name: json.loads(kf) for name, kf in module_rows},
         "summary_by_module": {name: (text, json.loads(ev)) for name, text, ev in summary_rows},
@@ -133,8 +144,8 @@ def render_mermaid_source(data: dict) -> str:
     for s in data["subsystems"]:
         sid = safe_id[s["id"]]
         label = s["name"] if len(s["modules"]) <= 1 else f'{s["name"]} ({len(s["modules"])} modules)'
-        lines.append(f'    {sid}["{_mermaid_label(label)}"]')
-        lines.append(f'    click {sid} "{_slugify(s["name"])}.html" "Open {_mermaid_label(s["name"])}"')
+        lines.append(f'    {sid}["{escape_label(label)}"]')
+        lines.append(f'    click {sid} "{s["slug"]}.html" "Open {escape_label(s["name"])}"')
         status = "verified" if _subsystem_is_verified(s, data) else "neutral"
         lines.append(f"    class {sid} {status}")
 
@@ -148,16 +159,12 @@ def render_mermaid_source(data: dict) -> str:
         manifest_name = edge["target"].removeprefix("manifest:")
         if edge["target"] not in manifest_ids:
             manifest_ids[edge["target"]] = f"m{len(manifest_ids)}"
-            lines.append(f'    {manifest_ids[edge["target"]]}(("{_mermaid_label(manifest_name)}"))')
+            lines.append(f'    {manifest_ids[edge["target"]]}(("{escape_label(manifest_name)}"))')
         lines.append(f'    {safe_id[subsystem_id]} -.->|depends on| {manifest_ids[edge["target"]]}')
 
     lines.append("    classDef verified fill:#123a2a,stroke:#6fd7a3,color:#eef4ff;")
     lines.append("    classDef neutral fill:#0e2038,stroke:#24406b,color:#9fb3d1;")
     return "\n".join(lines)
-
-
-def _mermaid_label(text: str) -> str:
-    return text.replace('"', "'")
 
 
 def render_index(data: dict) -> str:
@@ -171,7 +178,7 @@ def render_index(data: dict) -> str:
         badge = '<span class="badge verified">verified</span>' if verified else ""
         narrative = s["narrative"] or "No synthesized narrative yet."
         one_line = narrative if len(narrative) <= 160 else narrative[:157] + "..."
-        href = f"{_slugify(s['name'])}.html"
+        href = f"{s['slug']}.html"
         subsystem_cards.append(
             f'<div class="card"><h3><a class="back" href="{_E(href)}">{_E(s["name"])}</a>{badge}</h3>'
             f'<p>{_E(one_line)}</p>'
@@ -295,7 +302,7 @@ def build_site(sweep_dir: Path) -> Path:
 
     (site_dir / "index.html").write_text(render_index(data))
     for s in data["subsystems"]:
-        (site_dir / f"{_slugify(s['name'])}.html").write_text(render_subsystem_page(s, data))
+        (site_dir / f"{s['slug']}.html").write_text(render_subsystem_page(s, data))
 
     site_vendor = site_dir / "vendor"
     site_vendor.mkdir(exist_ok=True)

@@ -13,44 +13,35 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from pathlib import Path
 
+from db import open_db
 from edges import render_edge_descriptions_report
 from semantic import render_semantic_report
 
 
 def update_subsystem(db_path: Path, subsystem_id: str, name: str, narrative: str) -> None:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         conn.execute(
             "UPDATE subsystems SET name = ?, narrative = ? WHERE id = ?",
             (name, narrative, subsystem_id),
         )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def set_sweep_overview(db_path: Path, overview: str) -> None:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         conn.execute("UPDATE sweeps SET overview = ?", (overview,))
         conn.commit()
-    finally:
-        conn.close()
 
 
 def render_full_report(db_path: Path) -> str:
-    conn = sqlite3.connect(db_path)
-    try:
+    with open_db(db_path) as conn:
         repo_name, overview = conn.execute("SELECT repo_name, overview FROM sweeps LIMIT 1").fetchone()
         subsystem_rows = conn.execute(
             "SELECT id, name, narrative FROM subsystems ORDER BY name"
         ).fetchall()
         module_rows = conn.execute("SELECT subsystem_id, module_name FROM module_subsystem").fetchall()
-    finally:
-        conn.close()
 
     modules_by_subsystem: dict[str, list[str]] = {}
     for subsystem_id, module_name in module_rows:
