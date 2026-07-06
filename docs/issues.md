@@ -150,3 +150,112 @@ Acceptance criteria:
 - Can delete a history item.
 
 Skipped for now: cloud accounts, team history.
+
+---
+
+The following slices belong to a separate tool (`docs/prd-understand-repo.md`)
+that ships in this repo and depends on the analyzer above, but isn't part of
+the web app's Slice 1-9 numbering in spirit — it's a Claude Code skill, not a
+web UI feature. Numbering continues from 9 anyway since this is the same
+backlog file and build-order convention (prove the analysis before building
+a visual layer) still applies.
+
+## Slice 10: Cluster Modules Into Subsystems (No LLM Yet)
+
+Same analyzer core, new command — reuses `analyze_local_repo`'s existing
+`Node`/`Edge` graph and groups module-nodes into subsystems by connected
+components over `"imports"` edges. No semantic layer yet; this slice proves
+the deterministic backbone the rest of the skill sits on.
+
+Acceptance criteria:
+
+- New clustering function: `cluster_modules(nodes, edges) -> list[Subsystem]`,
+  connected components over module→module `"imports"` edges only.
+- A module with no inter-module edges becomes its own singleton subsystem —
+  no crash, no special-casing.
+- New `/understand-repo <path>` skill scaffold (built with skill-creator)
+  that: runs the structural pass, runs clustering, writes a `sweeps` SQLite
+  row + `subsystems`/`module_subsystem` rows under
+  `blueprint/.understanding/<repo-name>/<timestamp>-<sha>/understanding.db`,
+  and prints a plain-text list of subsystems + their modules to the terminal.
+- Re-running on the same repo creates a new timestamped sweep directory
+  rather than overwriting the last one; a `latest` pointer is updated.
+- One runnable check: a fixture repo with a known edge shape asserting
+  correct cluster membership + the singleton case.
+
+Skipped for now: semantic summaries, HTML site, Markdown report — this
+slice is structure + persistence only.
+
+## Slice 11: Verified Per-Module Semantic Summaries
+
+Same skill, richer output — now each module gets an AI-written summary, but
+only after a second independent agent fails to refute it.
+
+Acceptance criteria:
+
+- Ultracode pipeline, one stage per module: Agent A writes a summary citing
+  specific evidence files; Agent B independently re-reads the same files
+  and attempts to refute Agent A's claim.
+- Only claims Agent B can't refute are kept, written to a new
+  `semantic_summaries` table tagged `confidence="semantic"` — a new tier
+  alongside the existing `"structural"`/`"heuristic"`.
+- A module where every claim is refuted still appears in the sweep
+  (structural facts only) with an explicit "no verified semantic summary
+  this sweep" note — never silently dropped.
+- An agent call that fails outright falls back to the same
+  "structural only" path; the sweep continues for remaining modules.
+- Markdown report (`report.md` in the sweep directory) gains a per-module
+  "AI Interpretation — verified" section listing only kept claims and their
+  evidence.
+- One runnable check against the DB writer/report renderer (fixture
+  summaries in, correct rows/Markdown out) — the LLM stages themselves are
+  verified by one real manual sweep, hand-reviewed for hallucination.
+
+Skipped for now: subsystem-level narrative, HTML site.
+
+## Slice 12: Subsystem Synthesis Narrative
+
+Same skill — now the per-module facts add up to a story: what each
+subsystem is for, and how subsystems connect.
+
+Acceptance criteria:
+
+- One synthesis agent, given only the verified per-module summaries
+  (Slice 11) + cluster assignments (Slice 10) + real inter-cluster edges,
+  writes a name + one-paragraph narrative per subsystem and one top-level
+  "how this repo fits together" summary.
+- Synthesis agent narrates existing verified data only — it does not
+  introduce new structural claims (spot-checked during manual review, same
+  as Slice 11).
+- `subsystems.narrative` populated in the DB; `report.md` gains a
+  "Subsystems" section (name + narrative + member modules) and a
+  top-of-report overview paragraph.
+- One runnable check: given fixture verified summaries + clusters, the
+  renderer produces the expected Markdown structure (the synthesis agent's
+  actual prose isn't unit-tested, same caveat as Slice 11).
+
+Skipped for now: HTML site.
+
+## Slice 13: Multi-Page HTML Site
+
+Same data, new surface — a readable, linkable site instead of one Markdown
+file, for browsing a big swept codebase.
+
+Acceptance criteria:
+
+- `site/index.html`: repo meta, subsystem list (name + one-line narrative +
+  module count), links to each subsystem page.
+- `site/subsystem-<name>.html`: subsystem narrative, its modules with each
+  verified summary + evidence files + key files, and real edges within/
+  leaving the subsystem.
+- All pages self-contained (inline CSS, no external requests, reusing
+  `html_export.py`'s existing dark-theme styles) and linked to each other
+  via relative paths only.
+- Same "no HTML injection" convention as the rest of Blueprint: every
+  repo-derived string is escaped before embedding.
+- One runnable check: fixture sweep data in, assert both pages render, no
+  `<script`/external `<link`, and cross-page links resolve to real
+  generated filenames.
+
+Skipped for now: search/filter within the site, comparing two sweeps side
+by side.

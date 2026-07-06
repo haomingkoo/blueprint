@@ -854,6 +854,63 @@ def _describe_reachability_flow(module: Module, reached_edges: list[Edge]) -> st
     return sentence
 
 
+@dataclass
+class Subsystem:
+    """A group of modules clustered by real import relationships (Slice 10
+    of the understand-repo skill, docs/prd-understand-repo.md) — connected
+    components over module->module "imports" edges only, no LLM involved.
+    A module with no inter-module edges becomes its own singleton
+    subsystem."""
+    id: str
+    name: str
+    module_names: list[str]
+
+
+def cluster_modules(nodes: list[Node], edges: list[Edge]) -> list[Subsystem]:
+    """Groups module nodes into subsystems via connected components over
+    "imports" edges only — "depends_on" edges (module->manifest) never merge
+    modules together. Deterministic and reproducible: no LLM, no new
+    file-content parsing, just a graph traversal over `build_graph`'s
+    existing output."""
+    module_names = [n.label for n in nodes if n.type == "module"]
+    adjacency: dict[str, set[str]] = {name: set() for name in module_names}
+    for e in edges:
+        if e.type != "imports":
+            continue
+        source = e.source.removeprefix("module:")
+        target = e.target.removeprefix("module:")
+        if source in adjacency and target in adjacency:
+            adjacency[source].add(target)
+            adjacency[target].add(source)
+
+    visited: set[str] = set()
+    components: list[list[str]] = []
+    for name in module_names:
+        if name in visited:
+            continue
+        components.append(sorted(_connected_component(name, adjacency, visited)))
+
+    components.sort(key=lambda names: (-len(names), names[0]))
+    return [
+        Subsystem(id=f"subsystem-{i}", name=" + ".join(names), module_names=names)
+        for i, names in enumerate(components, start=1)
+    ]
+
+
+def _connected_component(start: str, adjacency: dict[str, set[str]], visited: set[str]) -> list[str]:
+    stack = [start]
+    visited.add(start)
+    component = []
+    while stack:
+        current = stack.pop()
+        component.append(current)
+        for neighbor in adjacency[current]:
+            if neighbor not in visited:
+                visited.add(neighbor)
+                stack.append(neighbor)
+    return component
+
+
 def analyze_local_repo(repo_path: Path, url: str = "") -> RepoIndex:
     owner, name = (parse_github_url(url) if url else ("", repo_path.name))
     branch, commit_sha = "", ""
