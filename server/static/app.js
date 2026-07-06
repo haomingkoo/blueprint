@@ -48,6 +48,7 @@ async function onSubmit(event) {
     renderReport(data);
     if (window.BlueprintGraph) window.BlueprintGraph.render(data);
     if (window.BlueprintFlowView) window.BlueprintFlowView.render(data);
+    if (window.BlueprintExport) window.BlueprintExport.setAnalysis(data);
     viewTabs.hidden = false;
     setActiveView("report");
   } catch (err) {
@@ -59,6 +60,7 @@ function setLoading() {
   button.disabled = true;
   reportEl.replaceChildren();
   viewTabs.hidden = true;
+  if (window.BlueprintExport) window.BlueprintExport.hide();
   statusEl.replaceChildren(
     el("div", { className: "status-loading" }, [
       document.createTextNode(

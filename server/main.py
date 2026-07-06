@@ -4,17 +4,25 @@ One endpoint, `POST /api/analyze`, calls `analyzer`'s existing
 `analyze_github_repo` directly and returns `asdict(index)` as JSON — no
 analysis logic is duplicated here. The static frontend (`server/static/`)
 is a single page that calls this endpoint and renders the JSON.
+
+Slice 8 adds three export endpoints (`/api/export/markdown`, `/mermaid`,
+`/html`). None of them re-clone or re-analyze: the browser already holds
+the full `RepoIndex` JSON from a prior `/api/analyze` call and posts it
+back as-is, and each endpoint just reconstructs the dataclasses and calls
+`analyzer`'s existing `render_markdown`/`mermaid.py`/`html_export.py`
+directly -- purely packaging, no new analysis.
 """
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -26,7 +34,13 @@ ANALYZER_DIR = Path(__file__).resolve().parent.parent / "analyzer"
 if str(ANALYZER_DIR) not in sys.path:
     sys.path.insert(0, str(ANALYZER_DIR))
 
-from analyze import analyze_github_repo  # noqa: E402
+from analyze import (  # noqa: E402
+    Edge, FileInfo, Finding, Flow, Manifest, Module, Node, RepoIndex, RepoInfo,
+    analyze_github_repo,
+)
+from html_export import render_html_report  # noqa: E402
+from mermaid import render_mermaid_flow, render_mermaid_graph  # noqa: E402
+from report import render_markdown  # noqa: E402
 
 logger = logging.getLogger("blueprint.server")
 
@@ -89,6 +103,109 @@ def analyze(request: AnalyzeRequest) -> JSONResponse | dict:
             content={"error": "Analysis failed unexpectedly. Please try again."},
         )
     return asdict(index)
+
+
+# ---------- Slice 8: export endpoints ----------
+#
+# All three take back the exact `RepoIndex` JSON the browser already got
+# from `/api/analyze` (no re-clone, no re-analyze) and hand it to
+# `analyzer`'s existing rendering functions.
+
+_FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+class ExportIndexRequest(BaseModel):
+    index: dict
+
+
+class ExportMermaidRequest(BaseModel):
+    index: dict
+    flow_index: int | None = None
+
+
+class ExportError(Exception):
+    """A user-facing, already-safe-to-display error for a malformed export request."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+
+def _repo_index_from_dict(data: dict) -> RepoIndex:
+    """Reconstruct a `RepoIndex` (and its nested dataclasses) from the
+    plain JSON dict a browser posts back -- the same shape `asdict(index)`
+    produced in `/api/analyze`'s response."""
+    try:
+        return RepoIndex(
+            repo=RepoInfo(**data["repo"]),
+            files=[FileInfo(**f) for f in data.get("files", [])],
+            language_counts=data.get("language_counts", {}),
+            manifests=[Manifest(**m) for m in data.get("manifests", [])],
+            findings=[Finding(**f) for f in data.get("findings", [])],
+            modules=[Module(**m) for m in data.get("modules", [])],
+            nodes=[Node(**n) for n in data.get("nodes", [])],
+            edges=[Edge(**e) for e in data.get("edges", [])],
+            flows=[_flow_from_dict(f) for f in data.get("flows", [])],
+        )
+    except (KeyError, TypeError) as exc:
+        raise ExportError("Invalid analysis data.") from exc
+
+
+def _flow_from_dict(data: dict) -> Flow:
+    return Flow(
+        title=data["title"],
+        nodes=[Node(**n) for n in data["nodes"]],
+        edges=[Edge(**e) for e in data["edges"]],
+        explanation=data["explanation"],
+        evidence=data["evidence"],
+        confidence=data["confidence"],
+    )
+
+
+def _safe_filename_component(value: str) -> str:
+    return _FILENAME_SAFE_RE.sub("_", value) or "repo"
+
+
+@app.post("/api/export/markdown", response_model=None)
+def export_markdown(request: ExportIndexRequest) -> PlainTextResponse | JSONResponse:
+    """Markdown export: `render_markdown` as-is, already includes the repo
+    URL + commit SHA (Slice 1)."""
+    try:
+        index = _repo_index_from_dict(request.index)
+    except ExportError as exc:
+        return JSONResponse(status_code=400, content={"error": exc.message})
+    return PlainTextResponse(render_markdown(index), media_type="text/markdown; charset=utf-8")
+
+
+@app.post("/api/export/mermaid", response_model=None)
+def export_mermaid(request: ExportMermaidRequest) -> PlainTextResponse | JSONResponse:
+    """Mermaid export for either the full architecture graph
+    (`flow_index` omitted/`null`) or one selected flow."""
+    try:
+        index = _repo_index_from_dict(request.index)
+    except ExportError as exc:
+        return JSONResponse(status_code=400, content={"error": exc.message})
+    if request.flow_index is None:
+        mermaid = render_mermaid_graph(index)
+    elif 0 <= request.flow_index < len(index.flows):
+        mermaid = render_mermaid_flow(index, request.flow_index)
+    else:
+        return JSONResponse(status_code=400, content={"error": "Invalid flow index."})
+    return PlainTextResponse(mermaid, media_type="text/plain; charset=utf-8")
+
+
+@app.post("/api/export/html", response_model=None)
+def export_html(request: ExportIndexRequest) -> HTMLResponse | JSONResponse:
+    """Self-contained HTML report: styles inlined, system font stack, no
+    external requests -- safe to open via file:// or send to someone."""
+    try:
+        index = _repo_index_from_dict(request.index)
+    except ExportError as exc:
+        return JSONResponse(status_code=400, content={"error": exc.message})
+    filename = f"{_safe_filename_component(index.repo.name)}-blueprint-report.html"
+    return HTMLResponse(
+        content=render_html_report(index),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # Mounted last and at "/" so it only catches requests that didn't match a

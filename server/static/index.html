@@ -63,6 +63,12 @@
     <button type="button" class="view-tab" data-view="flow">Flow Explorer</button>
   </div>
 
+  <div id="export-bar" class="export-bar" hidden>
+    <button type="button" id="export-copy-markdown" class="export-button">Copy Markdown</button>
+    <button type="button" id="export-download-html" class="export-button">Download HTML</button>
+    <span id="export-status" class="export-status" role="status" aria-live="polite"></span>
+  </div>
+
   <section id="report" class="report" aria-live="polite"></section>
 
   <section id="graph-view" class="graph-view" hidden aria-label="Architecture graph">
@@ -80,6 +86,7 @@
         <button type="button" id="graph-zoom-in" class="graph-zoom-button" aria-label="Zoom in">+</button>
         <button type="button" id="graph-zoom-fit" class="graph-zoom-button graph-zoom-fit" aria-label="Fit to view">Fit</button>
       </div>
+      <button type="button" id="graph-copy-mermaid" class="export-button">Copy Mermaid</button>
     </div>
     <div class="graph-canvas-wrap">
       <svg id="graph-svg" class="graph-svg" role="img" aria-label="Repository architecture graph"></svg>
@@ -118,6 +125,7 @@
           <button type="button" id="flow-graph-zoom-in" class="graph-zoom-button" aria-label="Zoom in">+</button>
           <button type="button" id="flow-graph-zoom-fit" class="graph-zoom-button graph-zoom-fit" aria-label="Fit to view">Fit</button>
         </div>
+        <button type="button" id="flow-copy-mermaid" class="export-button">Copy Mermaid</button>
       </div>
       <div class="graph-canvas-wrap">
         <svg id="flow-graph-svg" class="graph-svg" role="img" aria-label="Selected flow diagram"></svg>
@@ -141,6 +149,7 @@
 <script src="/vendor/dagre.min.js"></script>
 <script src="/graph.js"></script>
 <script src="/flow.js"></script>
+<script src="/export.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
