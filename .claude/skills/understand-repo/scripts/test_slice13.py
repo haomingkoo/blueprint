@@ -66,45 +66,47 @@ def test_assign_unique_slugs_never_produces_index():
     assert "index" not in [s["slug"] for s in subsystems]
 
 
-def test_build_site_writes_a_page_per_subsystem_even_with_colliding_names(tmp_path):
-    sweep_dir = tmp_path / "sweep"
-    sweep_dir.mkdir()
-    _seed_sweep_db(sweep_dir / "understanding.db", [("subsystem-1", "Core"), ("subsystem-2", "core")])
+def test_build_site_writes_a_page_per_subsystem_even_with_colliding_names():
+    with tempfile.TemporaryDirectory() as tmp:
+        sweep_dir = Path(tmp) / "sweep"
+        sweep_dir.mkdir()
+        _seed_sweep_db(sweep_dir / "understanding.db", [("subsystem-1", "Core"), ("subsystem-2", "core")])
 
-    site_dir = build_site(sweep_dir)
+        site_dir = build_site(sweep_dir)
 
-    html_files = sorted(p.name for p in site_dir.glob("*.html"))
-    assert "index.html" in html_files
-    assert len(html_files) == 3  # index + 2 distinct subsystem pages, no overwrite
+        html_files = sorted(p.name for p in site_dir.glob("*.html"))
+        assert "index.html" in html_files
+        assert len(html_files) == 3  # index + 2 distinct subsystem pages, no overwrite
 
 
-def test_build_site_shows_verified_summary_and_edge_description(tmp_path):
-    sweep_dir = tmp_path / "sweep"
-    sweep_dir.mkdir()
-    db_path = sweep_dir / "understanding.db"
-    _seed_sweep_db(db_path, [("subsystem-1", "app")])
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO semantic_summaries (sweep_id, module_name, summary_text, evidence_files, verified, confidence) "
-        "VALUES (1, 'subsystem-1', 'Handles HTTP routing.', '[\"subsystem-1/x.py\"]', 1, 'semantic')"
-    )
-    conn.execute(
-        "INSERT INTO edges (sweep_id, source, target, type, label, evidence) VALUES "
-        "(1, 'module:subsystem-1', 'manifest:requirements.txt', 'depends_on', 'depends on', '[]')"
-    )
-    conn.execute(
-        "INSERT INTO edge_descriptions (sweep_id, source, target, description, evidence_files, confidence) VALUES "
-        "(1, 'module:subsystem-1', 'manifest:requirements.txt', 'Pins FastAPI as a runtime dependency.', '[]', 'semantic')"
-    )
-    conn.commit()
-    conn.close()
+def test_build_site_shows_verified_summary_and_edge_description():
+    with tempfile.TemporaryDirectory() as tmp:
+        sweep_dir = Path(tmp) / "sweep"
+        sweep_dir.mkdir()
+        db_path = sweep_dir / "understanding.db"
+        _seed_sweep_db(db_path, [("subsystem-1", "app")])
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO semantic_summaries (sweep_id, module_name, summary_text, evidence_files, verified, confidence) "
+            "VALUES (1, 'subsystem-1', 'Handles HTTP routing.', '[\"subsystem-1/x.py\"]', 1, 'semantic')"
+        )
+        conn.execute(
+            "INSERT INTO edges (sweep_id, source, target, type, label, evidence) VALUES "
+            "(1, 'module:subsystem-1', 'manifest:requirements.txt', 'depends_on', 'depends on', '[]')"
+        )
+        conn.execute(
+            "INSERT INTO edge_descriptions (sweep_id, source, target, description, evidence_files, confidence) VALUES "
+            "(1, 'module:subsystem-1', 'manifest:requirements.txt', 'Pins FastAPI as a runtime dependency.', '[]', 'semantic')"
+        )
+        conn.commit()
+        conn.close()
 
-    site_dir = build_site(sweep_dir)
+        site_dir = build_site(sweep_dir)
 
-    data = load_sweep_data(db_path)
-    subsystem_page = (site_dir / f"{data['subsystems'][0]['slug']}.html").read_text()
-    assert "Handles HTTP routing." in subsystem_page
-    assert "Pins FastAPI as a runtime dependency." in subsystem_page
+        data = load_sweep_data(db_path)
+        subsystem_page = (site_dir / f"{data['subsystems'][0]['slug']}.html").read_text()
+        assert "Handles HTTP routing." in subsystem_page
+        assert "Pins FastAPI as a runtime dependency." in subsystem_page
 
 
 if __name__ == "__main__":

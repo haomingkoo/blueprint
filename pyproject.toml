@@ -13,8 +13,10 @@ python-version = "3.12"
 # server/main.py imports analyzer's `analyze` module the same way
 # analyzer/report.py does (a bare top-level import, no package __init__.py),
 # so ty needs analyzer/ as an extra resolution root for that import to
-# type-check across the analyzer/server directory boundary.
-extra-paths = ["analyzer"]
+# type-check across the analyzer/server directory boundary. Same reason
+# for the skill scripts path: server/understanding_bridge.py imports
+# understand-repo's `edges` module the same way.
+extra-paths = ["analyzer", ".claude/skills/understand-repo/scripts"]
 
 [tool.ty.src]
-include = ["analyzer", "server"]
+include = ["analyzer", "server", ".claude/skills/understand-repo/scripts"]

@@ -428,3 +428,20 @@ Not fixed (flagged, not code-fixable without a larger redesign): the
 check that an actual Agent-B refutation attempt happened before a claim
 is written. Revisit only as part of a real orchestration redesign, not a
 quick patch.
+
+## Web-graph ↔ understand-repo bridge — done 2026-07-06
+
+What shipped (design: `docs/superpowers/specs/2026-07-06-web-graph-understanding-bridge-design.md`):
+- `server/understanding_bridge.py` (new): `enrich_with_understanding(repo_name, response)` — read-only. If `.understanding/<repo_name>/latest/understanding.db` exists, merges `sweeps.overview`/`commit_sha`, per-module `verified_summary` (matched onto `Node.id == "module:<name>"`), and per-edge `verified_description` (via the skill's own `edges.load_edges_with_descriptions`, reused not reimplemented) into the JSON `/api/analyze` already returns. No sweep found, or a corrupt/incompatible db: response is returned completely unchanged — this is enrichment, never a hard dependency, and never triggers a sweep or writes to the sweep db itself.
+- `server/main.py`: one call added at the end of `analyze()`, plus `server/`'s own directory added to `sys.path` (a real gap this caught: `from understanding_bridge import ...` only worked under pytest's auto-path-insertion before this — running the app for real via `uvicorn server.main:app` crashed with `ModuleNotFoundError` until fixed).
+- `server/static/graph.js`: node drawer gains a "Verified summary" block (badge + text + evidence), rendered only when `node.verified_summary` is present — every other drawer field unchanged. Edge labels now show `edge.verified_description` in place of the generic "imports"/"depends on" when present, using the exact same text for both dagre layout sizing and on-diagram drawing (`edgeDisplayLabel` helper) so the label box is never undersized for what's actually rendered.
+- `server/static/index.html` / `app.js` / `styles.css`: a one-line `#understanding-overview` banner above the graph, shown only when `understanding_overview` is present; reset on every new analyze.
+- `pyproject.toml`: added `.claude/skills/understand-repo/scripts` to `ty`'s `extra-paths`/`include` (same reason `analyzer` is there — `understanding_bridge.py` imports the skill's `edges` module the same bare-top-level way).
+
+Verified: `python3 -m pytest analyzer server .claude/skills/understand-repo/scripts -q` — 73 passed (3 new server tests: no-sweep-unchanged, merges-real-sweep-data, degrades-gracefully-on-corrupt-db). `uvx ruff check` clean. `uvx ty check` — same 2 pre-existing baseline diagnostics, no new ones. `node --check` on `app.js`/`graph.js` clean. **Real end-to-end run, not just unit tests**: swept this actual blueprint repo locally, added a real verified module summary + edge description + overview via the skill's CLI, started the real server, and hit the real `/api/analyze` against `https://github.com/haomingkoo/blueprint` (a real clone, not a fixture) — confirmed the live JSON response carried `understanding_overview`, `understanding_commit_sha`, the `server` node's `verified_summary`, and the `server → requirements.txt` edge's `verified_description`, exactly as designed.
+
+Decisions made this session (not in the design doc):
+- **Matched by `repo_name` only, no commit-SHA staleness check** — per the design's explicit non-goal; the sweep's own `understanding_commit_sha` is exposed so a viewer can judge relevance themselves.
+- **Edge label sizing bug avoided by construction**: computing `edgeDisplayLabel(edge)` once and using it for both `measureEdgeLabel` (layout) and the drawn `<text>` (render), rather than sizing off `edge.label` and drawing `edge.verified_description` — the two would drift for any description longer than its generic label.
+
+Next: Slice 9 (Analysis History) is still unbuilt; clustering quality on a large/messy repo remains untested per the PRD's deliberately-deferred open question.

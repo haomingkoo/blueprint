@@ -34,6 +34,15 @@ ANALYZER_DIR = Path(__file__).resolve().parent.parent / "analyzer"
 if str(ANALYZER_DIR) not in sys.path:
     sys.path.insert(0, str(ANALYZER_DIR))
 
+# server/ itself needs to be on sys.path too: when this module is loaded as
+# the dotted path "server.main" (e.g. `uvicorn server.main:app --app-dir .`),
+# only the repo root is on sys.path by default, so a bare `import
+# understanding_bridge` below would otherwise only resolve under pytest
+# (which auto-adds a test file's own directory).
+_SERVER_DIR = Path(__file__).resolve().parent
+if str(_SERVER_DIR) not in sys.path:
+    sys.path.insert(0, str(_SERVER_DIR))
+
 from analyze import (  # noqa: E402
     Edge, FileInfo, Finding, Flow, Manifest, Module, Node, RepoIndex, RepoInfo,
     analyze_github_repo,
@@ -41,6 +50,8 @@ from analyze import (  # noqa: E402
 from html_export import render_html_report  # noqa: E402
 from mermaid import render_mermaid_flow, render_mermaid_graph  # noqa: E402
 from report import render_markdown  # noqa: E402
+
+from understanding_bridge import enrich_with_understanding
 
 logger = logging.getLogger("blueprint.server")
 
@@ -102,7 +113,10 @@ def analyze(request: AnalyzeRequest) -> JSONResponse | dict:
             status_code=502,
             content={"error": "Analysis failed unexpectedly. Please try again."},
         )
-    return asdict(index)
+    response = asdict(index)
+    if index.repo.name:
+        enrich_with_understanding(index.repo.name, response)
+    return response
 
 
 # ---------- Slice 8: export endpoints ----------

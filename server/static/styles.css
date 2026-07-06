@@ -897,6 +897,47 @@ body {
   margin: 0;
 }
 
+/* ---------- Verified summary (web-graph <-> understand-repo bridge) ---------- */
+/* Only ever rendered when a local sweep already covered this node/edge and
+   the claim survived adversarial verification -- see understanding_bridge.py. */
+
+.drawer-verified {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--line);
+}
+
+.badge-verified {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sev-low);
+  border: 1px solid var(--sev-low);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  margin-bottom: 0.5rem;
+}
+
+.drawer-verified-text {
+  font-size: 0.92rem;
+  color: var(--ink);
+  margin: 0 0 0.6rem;
+}
+
+.understanding-overview {
+  font-size: 0.92rem;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  padding: 0.75rem 1rem;
+  margin: 0 0 1.25rem;
+}
+
+.understanding-overview[hidden] { display: none; }
+
 @media (max-width: 720px) {
   .graph-drawer { left: 0.75rem; width: auto; }
 }

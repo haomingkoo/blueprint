@@ -21,6 +21,7 @@ const reportEl = document.getElementById("report");
 const viewTabs = document.getElementById("view-tabs");
 const graphViewEl = document.getElementById("graph-view");
 const flowViewEl = document.getElementById("flow-view");
+const understandingOverviewEl = document.getElementById("understanding-overview");
 
 form.addEventListener("submit", onSubmit);
 viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
@@ -49,6 +50,7 @@ async function onSubmit(event) {
     if (window.BlueprintGraph) window.BlueprintGraph.render(data);
     if (window.BlueprintFlowView) window.BlueprintFlowView.render(data);
     if (window.BlueprintExport) window.BlueprintExport.setAnalysis(data);
+    renderUnderstandingOverview(data);
     viewTabs.hidden = false;
     setActiveView("report");
   } catch (err) {
@@ -56,11 +58,26 @@ async function onSubmit(event) {
   }
 }
 
+// Only populated when a local understand-repo sweep already exists for
+// this repo (see understanding_bridge.py) -- absent otherwise, same as
+// today's graph view.
+function renderUnderstandingOverview(data) {
+  if (!data.understanding_overview) {
+    understandingOverviewEl.hidden = true;
+    understandingOverviewEl.textContent = "";
+    return;
+  }
+  understandingOverviewEl.textContent = data.understanding_overview;
+  understandingOverviewEl.hidden = false;
+}
+
 function setLoading() {
   button.disabled = true;
   reportEl.replaceChildren();
   viewTabs.hidden = true;
   if (window.BlueprintExport) window.BlueprintExport.hide();
+  understandingOverviewEl.hidden = true;
+  understandingOverviewEl.textContent = "";
   statusEl.replaceChildren(
     el("div", { className: "status-loading" }, [
       document.createTextNode(

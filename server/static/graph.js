@@ -46,6 +46,15 @@
     return { width, height: NODE_HEIGHT };
   }
 
+  // A verified description (see understanding_bridge.py) replaces the
+  // generic structural label ("imports"/"depends on") on the diagram --
+  // same text used for both sizing (layoutAndDraw) and drawing
+  // (buildEdgeGroup) so the label box is never undersized for what's
+  // actually rendered.
+  function edgeDisplayLabel(edge) {
+    return edge.verified_description || edge.label;
+  }
+
   function measureEdgeLabel(label) {
     return { width: measureTextWidth(label, EDGE_LABEL_FONT) + 14, height: 18 };
   }
@@ -153,8 +162,9 @@
       // collide on the same (v, w) pair. Plain graphlib (not a multigraph)
       // is enough, and passing a name would throw ("isMultigraph = false").
       for (const edge of visibleEdges) {
-        const { width, height } = measureEdgeLabel(edge.label);
-        g.setEdge(edge.source, edge.target, { label: edge.label, width, height });
+        const label = edgeDisplayLabel(edge);
+        const { width, height } = measureEdgeLabel(label);
+        g.setEdge(edge.source, edge.target, { label, width, height });
       }
 
       dagre.layout(g);
@@ -210,7 +220,7 @@
           x: layout.x - layout.width / 2, y: layout.y - layout.height / 2,
           width: layout.width, height: layout.height, rx: 3, ry: 3,
         }));
-        group.appendChild(textEl("graph-edge-label", layout.x, layout.y + 3, edge.label));
+        group.appendChild(textEl("graph-edge-label", layout.x, layout.y + 3, edgeDisplayLabel(edge)));
       }
       return group;
     }
@@ -374,13 +384,33 @@
       if (!drawer) return;
       drawer.hidden = false;
       drawer.replaceChildren(
-        drawerCloseButton(),
-        drawerText("drawer-type", node.type),
-        drawerText("drawer-label", node.label, "h3"),
-        drawerRow("Files", node.file_paths),
-        drawerRow("Evidence", node.evidence),
-        drawerConfidence(node.confidence)
+        ...[
+          drawerCloseButton(),
+          drawerText("drawer-type", node.type),
+          drawerText("drawer-label", node.label, "h3"),
+          drawerRow("Files", node.file_paths),
+          drawerRow("Evidence", node.evidence),
+          drawerConfidence(node.confidence),
+          drawerVerifiedSummary(node.verified_summary),
+        ].filter(Boolean)
       );
+    }
+
+    // Only rendered when a local understand-repo sweep already covered
+    // this module and its claim survived adversarial verification -- see
+    // understanding_bridge.py. Absent for every other node, unchanged from
+    // today's drawer.
+    function drawerVerifiedSummary(summary) {
+      if (!summary) return null;
+      const wrap = document.createElement("div");
+      wrap.className = "drawer-verified";
+      const badge = document.createElement("span");
+      badge.className = "badge-verified";
+      badge.textContent = "Verified summary";
+      wrap.appendChild(badge);
+      wrap.appendChild(drawerText("drawer-verified-text", summary.text));
+      wrap.appendChild(drawerRow("Evidence", summary.evidence_files));
+      return wrap;
     }
 
     function closeDrawer() {

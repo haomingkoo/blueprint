@@ -6,6 +6,7 @@ point of this check. `analyze_github_repo` is stubbed out at the module
 level (no network/git calls), matching testing.md's "mock external
 dependencies" rule.
 """
+import sqlite3
 import subprocess
 import sys
 from dataclasses import asdict
@@ -17,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fastapi.testclient import TestClient
 
 import main  # noqa: E402 (sys.path setup must run first)
-from analyze import FileInfo, Flow, Node, RepoIndex, RepoInfo  # noqa: E402 (analyzer dir added to sys.path by importing main)
+import understanding_bridge  # noqa: E402
+from analyze import Edge, FileInfo, Flow, Node, RepoIndex, RepoInfo  # noqa: E402 (analyzer dir added to sys.path by importing main)
 
 client = TestClient(main.app)
 
@@ -76,6 +78,98 @@ def test_analyze_rejects_blank_url_with_clean_400():
 
     assert response.status_code == 400
     assert "required" in response.json()["error"].lower()
+
+
+# ---------- understanding_bridge: read-only enrichment from a local sweep ----------
+
+
+def _fixture_index_with_a_module_node() -> RepoIndex:
+    index = _fixture_index()
+    index.nodes = [Node(
+        id="module:(repo root)", label="(repo root)", type="module",
+        file_paths=["README"], evidence=["README"], confidence="structural",
+    )]
+    index.edges = [Edge(
+        source="module:(repo root)", target="manifest:requirements.txt", type="depends_on",
+        label="depends on", evidence=["README"], confidence="heuristic",
+    )]
+    return index
+
+
+def _write_fixture_sweep_db(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE sweeps (id INTEGER PRIMARY KEY, repo_name TEXT, commit_sha TEXT, overview TEXT);
+        CREATE TABLE semantic_summaries (module_name TEXT, summary_text TEXT, evidence_files TEXT);
+        CREATE TABLE edges (source TEXT, target TEXT, type TEXT, label TEXT);
+        CREATE TABLE edge_descriptions (source TEXT, target TEXT, description TEXT, evidence_files TEXT);
+        """
+    )
+    conn.execute(
+        "INSERT INTO sweeps (repo_name, commit_sha, overview) VALUES ('Hello-World', 'sha123', 'A tiny demo repo.')"
+    )
+    conn.execute(
+        "INSERT INTO semantic_summaries (module_name, summary_text, evidence_files) VALUES "
+        "('(repo root)', 'Just a README.', '[\"README\"]')"
+    )
+    conn.execute(
+        "INSERT INTO edges (source, target, type, label) VALUES "
+        "('module:(repo root)', 'manifest:requirements.txt', 'depends_on', 'depends on')"
+    )
+    conn.execute(
+        "INSERT INTO edge_descriptions (source, target, description, evidence_files) VALUES "
+        "('module:(repo root)', 'manifest:requirements.txt', 'Pins the one runtime dependency.', '[]')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_analyze_with_no_matching_sweep_returns_response_unchanged(tmp_path):
+    with patch.object(understanding_bridge, "UNDERSTANDING_ROOT", tmp_path), \
+         patch.object(main, "analyze_github_repo", return_value=_fixture_index_with_a_module_node()):
+        response = client.post(
+            "/api/analyze", json={"repo_url": "https://github.com/octocat/Hello-World"}
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert "understanding_overview" not in body
+    assert "verified_summary" not in body["nodes"][0]
+
+
+def test_analyze_merges_verified_summary_and_edge_description_from_an_existing_sweep(tmp_path):
+    _write_fixture_sweep_db(tmp_path / "Hello-World" / "latest" / "understanding.db")
+
+    with patch.object(understanding_bridge, "UNDERSTANDING_ROOT", tmp_path), \
+         patch.object(main, "analyze_github_repo", return_value=_fixture_index_with_a_module_node()):
+        response = client.post(
+            "/api/analyze", json={"repo_url": "https://github.com/octocat/Hello-World"}
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["understanding_overview"] == "A tiny demo repo."
+    assert body["understanding_commit_sha"] == "sha123"
+    assert body["nodes"][0]["verified_summary"]["text"] == "Just a README."
+    assert body["edges"][0]["verified_description"] == "Pins the one runtime dependency."
+
+
+def test_analyze_degrades_gracefully_when_sweep_db_is_corrupt(tmp_path):
+    sweep_dir = tmp_path / "Hello-World" / "latest"
+    sweep_dir.mkdir(parents=True)
+    (sweep_dir / "understanding.db").write_text("not a real sqlite file")
+
+    with patch.object(understanding_bridge, "UNDERSTANDING_ROOT", tmp_path), \
+         patch.object(main, "analyze_github_repo", return_value=_fixture_index_with_a_module_node()):
+        response = client.post(
+            "/api/analyze", json={"repo_url": "https://github.com/octocat/Hello-World"}
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert "understanding_overview" not in body
 
 
 def test_analyze_translates_clone_failure_into_clean_400_not_a_traceback():
