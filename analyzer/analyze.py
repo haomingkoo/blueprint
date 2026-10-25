@@ -288,7 +288,9 @@ def _parse_package_json(abs_path: Path, rel_path: str) -> Manifest:
     except (OSError, json.JSONDecodeError):
         data = {}
     dependencies = sorted({**data.get("dependencies", {}), **data.get("devDependencies", {})})
-    scripts = data.get("scripts") if isinstance(data.get("scripts"), dict) else {}
+    scripts = data.get("scripts")
+    if not isinstance(scripts, dict):
+        scripts = {}
     return Manifest(
         path=rel_path, kind="npm", name=data.get("name", ""),
         dependencies=dependencies, scripts=scripts,
@@ -343,10 +345,12 @@ def _is_setup_call(node: ast.Call) -> bool:
 def _setup_call_kwargs(call: ast.Call) -> tuple[str, list[str]]:
     name, dependencies = "", []
     for kw in call.keywords:
-        if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+        if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
             name = kw.value.value
         if kw.arg == "install_requires" and isinstance(kw.value, ast.List):
-            dependencies = [elt.value for elt in kw.value.elts if isinstance(elt, ast.Constant)]
+            dependencies = [
+                elt.value for elt in kw.value.elts if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            ]
     return name, dependencies
 
 
